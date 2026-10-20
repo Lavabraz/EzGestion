@@ -85,6 +85,23 @@ class GoogleSheetWriter:
             if not query or query in task_name.casefold()
         ][:25]
 
+    def read_gantt_data(self):
+        wbs_rows = self.wbs_worksheet.get(
+            f"A{self.wbs_start_row}:K",
+            value_render_option="UNFORMATTED_VALUE",
+        )
+        activities = []
+        for member in self.members.values():
+            values = self.worksheet.get(
+                f"{member['date']}{self.start_row}:{member['task']}",
+                value_render_option="UNFORMATTED_VALUE",
+            )
+            for row in values:
+                if len(row) < 3 or not any(str(cell).strip() for cell in row):
+                    continue
+                activities.append((row[0], row[1], row[2]))
+        return wbs_rows, activities
+
     def _wbs_task_at(self, row: int) -> str:
         if row < self.wbs_start_row:
             raise ValueError("La tâche WBS sélectionnée n'est pas valide.")

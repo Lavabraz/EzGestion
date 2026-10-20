@@ -12,6 +12,24 @@ Dans le salon Discord configuré, lancez `/activite` et renseignez :
 
 Le bot confirme dans le salon l'enregistrement et met à jour l'onglet individuel ainsi que le total de la ligne WBS sélectionnée. Les erreurs et les saisies invalides sont également signalées publiquement dans le salon.
 
+## Générer un Gantt
+
+Dans le salon configuré, utilisez `/gantt` avec :
+
+- `debut` et `fin` au format `JJ/MM/AAAA` (période maximale : 366 jours).
+- `mode` : `Prévu` ou `Réel`.
+
+Le mode prévu lit l'ID (A), les dépendances (B, un ou plusieurs ID séparés par des virgules), l'intitulé (D), l'estimation avec marge (G), les personnes affectées (H) et les dates limites de début/fin (I/J). Il génère un calendrier au plus tard, en jours ouvrés, et n'affiche que les tâches dont le calendrier chevauche la période demandée. Le chemin critique mis en évidence est le plus long chemin du graphe de dépendances, calculé à partir des durées estimées; les dates I/J placent les tâches, mais ne changent pas ce calcul.
+
+Le mode réel représente les heures datées de l'onglet individuel dans la période choisie et affiche les tâches ayant une activité réelle à cette période. Les activités sont associées à une tâche par son intitulé exact; si plusieurs tâches ont le même intitulé, les heures correspondantes sont signalées comme non attribuées. Dans ce mode, le chemin critique affiché est celui du planning prévisionnel, pas un chemin critique recalculé à partir des heures historiques. Si les données prévisionnelles sont invalides, les heures réelles restent affichées et le chemin critique est signalé comme indisponible.
+
+Le calendrier exclut les week-ends, les jours fériés nationaux de France métropolitaine et, par défaut, les vacances du 26/10/2026 au 01/11/2026 inclus. Les paramètres facultatifs sont :
+
+- `GANTT_HOURS_PER_PERSON_PER_DAY` : capacité journalière par personne (défaut : `7`).
+- `GANTT_VACATION_RANGES` : périodes de congés inclusives au format `AAAA-MM-JJ:AAAA-MM-JJ`, séparées par des virgules.
+
+La durée estimée est convertie en jours ouvrés avec `Estimation avec marge / (capacité par personne × nombre de personnes affectées)`, arrondie au jour supérieur. Une estimation vide ou nulle est affichée comme jalon. Le calcul ne nivelle pas les conflits lorsqu'une personne est affectée à plusieurs tâches en même temps; le diagramme le signale. En mode prévu, les références de dépendance invalides, les cycles et les erreurs de données entraînent un message d'erreur plutôt qu'un planning trompeur.
+
 ## Pré-requis
 
 - Python 3.11+ (ou Docker).
@@ -69,7 +87,7 @@ pip install -r requirements.txt
 python bot.py
 ```
 
-Dans le salon surveillé, utilisez `/activite`, choisissez une durée et sélectionnez une tâche dans la liste proposée. Vérifiez que la ligne apparaît dans le bon bloc membre et que le total de la même tâche augmente dans WBS. Les commandes slash peuvent prendre quelques minutes à apparaître après leur synchronisation globale.
+Dans le salon surveillé, utilisez `/activite`, choisissez une durée et sélectionnez une tâche dans la liste proposée. Vérifiez que la ligne apparaît dans le bon bloc membre et que le total de la même tâche augmente dans WBS. Testez aussi `/gantt` en modes prévu et réel. Les commandes slash peuvent prendre quelques minutes à apparaître après leur synchronisation globale.
 
 ## 5. Déployer en continu avec Docker
 
