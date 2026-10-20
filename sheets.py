@@ -31,6 +31,8 @@ class GoogleSheetWriter:
             "GOOGLE_WORKSHEET_NAME", "Copie de HeuresIndividuelles"
         ).strip()
         self.start_row = int(os.getenv("GOOGLE_DATA_START_ROW", "4"))
+        self.wbs_worksheet_name = os.getenv("GOOGLE_WBS_WORKSHEET_NAME", "WBS").strip()
+        self.wbs_start_row = int(os.getenv("GOOGLE_WBS_DATA_START_ROW", "2"))
         self.credentials_path = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service-account.json")
 
         # Les colonnes correspondent à la capture : B-D, F-H et J-L.
@@ -62,6 +64,44 @@ class GoogleSheetWriter:
         self.sheets_api = build("sheets", "v4", credentials=credentials, cache_discovery=False)
         self.spreadsheet = self.client.open_by_key(self.spreadsheet_id)
         self.worksheet = self.spreadsheet.worksheet(self.worksheet_name)
+        self.wbs_worksheet = self.spreadsheet.worksheet(self.wbs_worksheet_name)
+        self.wbs_tasks = []
+        self.refresh_wbs_tasks()
+
+    def refresh_wbs_tasks(self):
+        """Recharge les tâches WBS utilisées par l'autocomplétion Discord."""
+        task_values = self.wbs_worksheet.col_values(4)[self.wbs_start_row - 1:]
+        self.wbs_tasks = [
+            (self.wbs_start_row + offset, task_name.strip())
+            for offset, task_name in enumerate(task_values)
+            if task_name.strip()
+        ]
+
+    def get_wbs_task_choices(self, query: str):
+        query = query.strip().casefold()
+        return [
+            (row, task_name)
+            for row, task_name in self.wbs_tasks
+            if not query or query in task_name.casefold()
+        ][:25]
+
+    def _wbs_task_at(self, row: int) -> str:
+        if row < self.wbs_start_row:
+            raise ValueError("La tâche WBS sélectionnée n'est pas valide.")
+        cached_task = dict(self.wbs_tasks).get(row)
+        task_name = self.wbs_worksheet.cell(row, 4).value
+        if not task_name or not str(task_name).strip():
+            raise ValueError(
+                f"Aucune tâche WBS n'existe en D{row}. "
+                "Relancez la commande et sélectionnez une tâche dans l'autocomplétion."
+            )
+        task_name = str(task_name).strip()
+        if cached_task != task_name:
+            raise ValueError(
+                "La liste WBS a changé depuis l'autocomplétion. "
+                "Relancez la commande et sélectionnez à nouveau la tâche."
+            )
+        return task_name
 
     def _next_row(self, date_col: str, duration_col: str, task_col: str) -> int:
         """Trouve la première ligne vide dans le bloc d'un membre."""
@@ -73,7 +113,34 @@ class GoogleSheetWriter:
                 return self.start_row + offset
         return self.start_row + len(values)
 
-    def write_activity(self, record):
+    def _add_wbs_hours(self, row: int, duration_hours: float):
+        hours_cell = self.wbs_worksheet.acell(f"K{row}")
+        current_value = hours_cell.value
+        if current_value in (None, ""):
+            current_hours = 0.0
+        else:
+            try:
+                current_hours = float(str(current_value).replace(",", "."))
+            except ValueError as error:
+                raise ValueError(
+                    f"La valeur d'heures WBS en K{row} n'est pas numérique : "
+                    f"{current_value!r}"
+                ) from error
+
+        new_total = current_hours + float(duration_hours)
+        self.wbs_worksheet.update(
+            range_name=f"K{row}",
+            values=[[new_total]],
+            value_input_option="USER_ENTERED",
+        )
+        log.info(
+            "Heures WBS ajoutées en K%d : +%s h, total=%s h",
+            row,
+            duration_hours,
+            new_total,
+        )
+
+    def write_activity(self, record, wbs_row: int):
         author = str(record.get("member", "")).strip().casefold()
         member = self.members.get(author)
         if member is None:
@@ -82,6 +149,7 @@ class GoogleSheetWriter:
                 "Configurez MEMBER_THOMAS, MEMBER_LUCAS et MEMBER_NATHAN dans .env."
             )
 
+        task_name = self._wbs_task_at(wbs_row)
         date_col, duration_col, task_col = member["date"], member["duration"], member["task"]
         row = self._next_row(date_col, duration_col, task_col)
 
@@ -91,11 +159,13 @@ class GoogleSheetWriter:
             values=[[
                 record["date"],
                 record["duration_hours"],
-                record["task"],
+                task_name,
             ]],
             value_input_option="USER_ENTERED",
         )
+        self._add_wbs_hours(wbs_row, record["duration_hours"])
         log.info(
-            "Activité de %s écrite dans %s%d:%s%d",
-            member["display"], date_col, row, task_col, row,
+            "Activité de %s écrite pour %r dans %s%d:%s%d",
+            member["display"], task_name, date_col, row, task_col, row,
         )
+        return task_name

@@ -1,7 +1,10 @@
+import asyncio
 import logging
 import os
 
 import discord
+from discord import app_commands
+from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
 from parser import parse_activity
@@ -25,45 +28,112 @@ if not CHANNEL_ID.isdigit():
 
 writer = GoogleSheetWriter()
 intents = discord.Intents.default()
-intents.message_content = True
-client = discord.Client(intents=intents)
+
+
+@tasks.loop(minutes=5)
+async def refresh_wbs_task_cache():
+    try:
+        await asyncio.to_thread(writer.refresh_wbs_tasks)
+    except Exception:
+        log.exception("Impossible de rafraîchir les tâches WBS pour l'autocomplétion")
+
+
+class ActivityBot(commands.Bot):
+    async def setup_hook(self):
+        await self.tree.sync()
+        refresh_wbs_task_cache.start()
+        log.info("Commandes Discord synchronisées")
+
+
+client = ActivityBot(command_prefix="!", intents=intents)
 
 
 @client.event
 async def on_ready():
     log.info("Connecté à Discord en tant que %s (ID %s)", client.user, client.user.id)
-    log.info("Surveillance du salon Discord ID %s", CHANNEL_ID)
+    log.info("Commande /activite disponible dans le salon Discord ID %s", CHANNEL_ID)
 
 
-@client.event
-async def on_message(message: discord.Message):
-    if message.author.bot or str(message.channel.id) != CHANNEL_ID:
+@client.tree.command(name="activite", description="Enregistrer du temps sur une tâche WBS")
+@app_commands.describe(
+    duree="Durée travaillée, par exemple 1h30 ou 45min",
+    tache="Tâche à sélectionner dans la liste WBS",
+    date="Date de l'activité au format JJ/MM/AAAA (facultatif)",
+)
+async def activite(
+    interaction: discord.Interaction,
+    duree: str,
+    tache: str,
+    date: str | None = None,
+):
+    if str(interaction.channel_id) != CHANNEL_ID:
+        await interaction.response.send_message(
+            "Cette commande est disponible uniquement dans le salon configuré.",
+        )
         return
 
-    parsed = parse_activity(message.content)
+    try:
+        wbs_row = int(tache)
+    except ValueError:
+        await interaction.response.send_message(
+            "Sélectionne une tâche dans les suggestions d'autocomplétion.",
+        )
+        return
+
+    activity_input = f"{duree} activité"
+    if date:
+        activity_input += f" {date}"
+    parsed = parse_activity(activity_input)
     if parsed is None:
-        log.info("Message ignoré (format non reconnu), message_id=%s", message.id)
+        await interaction.response.send_message(
+            "Durée ou date invalide. Utilise une durée comme `1h30` et une date "
+            "facultative au format `JJ/MM/AAAA`.",
+        )
         return
 
     record = {
         "date": parsed.activity_date,
         "duration": parsed.duration_text,
         "duration_hours": parsed.duration_minutes / 60,
-        "task": parsed.task,
-        "member": message.author.display_name,
-        "discord_user_id": str(message.author.id),
-        "message_url": message.jump_url,
-        "message_id": str(message.id),
-        "created_at": message.created_at.isoformat(),
+        "member": interaction.user.display_name,
+        "discord_user_id": str(interaction.user.id),
+        "message_url": "",
+        "message_id": str(interaction.id),
+        "created_at": interaction.created_at.isoformat(),
     }
 
+    await interaction.response.defer(thinking=True)
     try:
-        # Le travail réseau Google Sheets est bloquant : on le déporte du thread Discord.
-        import asyncio
-        await asyncio.to_thread(writer.write_activity, record)
-        log.info("Activité enregistrée : user=%s, message_id=%s", message.author, message.id)
+        task_name = await asyncio.to_thread(writer.write_activity, record, wbs_row)
     except Exception:
-        log.exception("Échec d'écriture Google Sheets pour message_id=%s", message.id)
+        log.exception(
+            "Échec d'écriture Google Sheets pour interaction_id=%s",
+            interaction.id,
+        )
+        await interaction.followup.send(
+            "Échec de l'écriture dans Google Sheets. Il est possible qu'une seule des "
+            "deux feuilles ait été mise à jour; vérifie avant de réessayer. "
+            "L'erreur a été consignée dans les logs.",
+        )
+        return
+
+    await interaction.followup.send(
+        f"Activité enregistrée : **{parsed.duration_text}** sur **{task_name}** "
+        f"le {parsed.activity_date}.",
+    )
+
+
+@activite.autocomplete("tache")
+async def autocomplete_tache(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    if str(interaction.channel_id) != CHANNEL_ID:
+        return []
+    return [
+        app_commands.Choice(name=f"{row} — {task_name}"[:100], value=str(row))
+        for row, task_name in writer.get_wbs_task_choices(current)
+    ]
 
 
 client.run(DISCORD_TOKEN)

@@ -1,22 +1,16 @@
 # Bot Discord → Google Sheets
 
-Bot Python qui écoute **un seul salon Discord**, analyse les nouveaux messages au format `temps tâche date facultative`, puis ajoute l'activité à un Google Sheet existant.
+Bot Python qui écoute **un seul salon Discord** et enregistre les activités saisies avec la commande slash `/activite`. La tâche est choisie dans les suggestions provenant de l'onglet WBS, puis les heures sont cumulées sur la ligne exacte sélectionnée.
 
-## Format des messages accepté
+## Enregistrer une activité
 
-Exemples :
-- `1h30 Développement de la connexion`
-- `45min Correction du bug de sauvegarde`
-- `2h Rédaction du rapport 18/10/2026`
-- `01:30 Revue de code 18-10-2026`
+Dans le salon Discord configuré, lancez `/activite` et renseignez :
 
-Règles :
-- Le message commence par une durée positive, suivie d'un espace puis de la tâche : `1h30 Développement de la connexion`, `45min Correction du bug`, `2h Rédaction du rapport 18/10/2026`.
-- Tout le texte après la durée constitue la tâche, sauf si le message se termine par une date `JJ/MM/AAAA` ou `JJ-MM-AAAA`, qui est alors interprétée comme la date de l'activité.
-- Si aucune date n'est donnée, la date d'activité est celle du jour où le bot analyse le message.
-- Les messages qui ne respectent pas le format sont ignorés et signalés dans les logs.
-- Les messages des bots sont ignorés.
-- Les messages envoyés avant le démarrage ne sont pas importés.
+- `duree` : par exemple `1h30`, `45min` ou `01:30`.
+- `tache` : sélectionnez une tâche dans les suggestions; saisissez quelques lettres pour filtrer la liste.
+- `date` : facultative, au format `JJ/MM/AAAA`; par défaut, la date du jour.
+
+Le bot confirme dans le salon l'enregistrement et met à jour l'onglet individuel ainsi que le total de la ligne WBS sélectionnée. Les erreurs et les saisies invalides sont également signalées publiquement dans le salon.
 
 ## Pré-requis
 
@@ -28,8 +22,8 @@ Règles :
 ## 1. Configurer Discord
 
 1. Créez une application puis un bot dans le Discord Developer Portal.
-2. Dans **Bot**, activez **Message Content Intent**.
-3. Invitez le bot sur votre serveur avec les permissions minimales : **View Channels** et **Read Message History**. Pour les nouveaux messages, il doit surtout pouvoir voir le salon et lire son contenu.
+2. Aucune activation de **Message Content Intent** n'est nécessaire : les activités sont saisies avec une commande slash.
+3. Invitez le bot sur votre serveur avec les scopes **bot** et **applications.commands**, et les permissions nécessaires pour voir le salon et utiliser les commandes.
 4. Copiez le token du bot. Ne le partagez jamais.
 5. Activez le mode développeur Discord, faites clic droit sur le salon cible et copiez son identifiant.
 
@@ -46,23 +40,21 @@ Règles :
 
 ## 3. Configurer le projet
 
-Copiez `.env.example` en `.env`, puis remplissez :
+Créez un fichier `.env`, puis renseignez :
 - `DISCORD_TOKEN`
 - `DISCORD_CHANNEL_ID`
 - `GOOGLE_SPREADSHEET_ID`
 - `GOOGLE_WORKSHEET_NAME`
-- les colonnes `SHEET_COL_*` pour correspondre à votre tableur.
+- `GOOGLE_DATA_START_ROW` (première ligne disponible pour les activités, défaut : `4`)
+- `GOOGLE_SERVICE_ACCOUNT_FILE` si le fichier de credentials n'est pas `service-account.json`
+- `MEMBER_THOMAS`, `MEMBER_LUCAS` et `MEMBER_NATHAN` si les noms d'affichage Discord diffèrent des valeurs par défaut.
 
-Exemple : si la date est en colonne B, le membre en A, la durée en C et la tâche en F, utilisez `SHEET_COL_DATE=B`, `SHEET_COL_MEMBER=A`, `SHEET_COL_DURATION=C`, `SHEET_COL_TASK=F`.
-
-`GOOGLE_DATA_START_ROW` doit être la première ligne où des activités peuvent être écrites, pas la ligne d'en-tête.
+Les colonnes de saisie individuelle sont configurées dans le code : date/heures/tâche en B-D, F-H et J-L pour Thomas, Lucas et Nathan.
 
 ### Préserver le formatage existant
 
 - Le bot **n'efface pas** la feuille et n'en recrée pas une nouvelle.
-- Il écrit seulement dans les cellules des colonnes configurées.
-- Laissez `GOOGLE_TEMPLATE_ROW=0` si les lignes de destination sont déjà formatées.
-- Si vous avez une ligne vide qui possède exactement le format souhaité, indiquez son numéro dans `GOOGLE_TEMPLATE_ROW`. Le bot copiera uniquement son formatage vers chaque nouvelle ligne, sans copier ses valeurs ou ses formules.
+- Il écrit uniquement dans le bloc du membre concerné, puis dans la cellule K de la tâche WBS sélectionnée.
 - Faites un essai sur une copie du tableur avant la première utilisation. Vérifiez aussi que la zone d'écriture ne chevauche pas des formules ou d'autres tableaux.
 
 ## 4. Lancer en local pour tester
@@ -73,12 +65,11 @@ Windows PowerShell :
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-Copy-Item .env.example .env
-# Éditez .env et ajoutez service-account.json
+# Créez .env et placez service-account.json dans ce dossier
 python bot.py
 ```
 
-Envoyez un message de test dans le salon surveillé, par exemple `30min Test d'intégration`. Vérifiez que la ligne apparaît dans le bon onglet et les bonnes colonnes.
+Dans le salon surveillé, utilisez `/activite`, choisissez une durée et sélectionnez une tâche dans la liste proposée. Vérifiez que la ligne apparaît dans le bon bloc membre et que le total de la même tâche augmente dans WBS. Les commandes slash peuvent prendre quelques minutes à apparaître après leur synchronisation globale.
 
 ## 5. Déployer en continu avec Docker
 
@@ -104,11 +95,8 @@ Ne publiez jamais `.env`, le token Discord ou la clé JSON dans Git, un dépôt 
 
 ## Notes techniques
 
-- L'ID du message est disponible pour audit, mais l'implémentation n'enregistre pas les anciens messages.
-- Le bot ne tente pas de réécrire un message corrigé ou supprimé après son enregistrement.
+- Les tâches de la colonne D de WBS sont rechargées au démarrage puis toutes les cinq minutes pour alimenter l'autocomplétion. Le bot vérifie que la ligne sélectionnée n'a pas changé avant d'enregistrer.
 - La sélection de ligne cherche la première ligne vide à partir de `GOOGLE_DATA_START_ROW`. Réservez donc une zone dédiée aux activités et évitez les trous dans cette zone.
-- Si les messages doivent être édités ultérieurement, ou si le réseau échoue après réception, une version avec stockage SQLite et reprise idempotente serait préférable.
-- Le champ membre est le nom d'affichage au moment du traitement ; l'ID Discord peut être stocké dans une colonne technique facultative.
 
 
 ## Configuration adaptée au tableau « Heures individuelles »
@@ -124,4 +112,10 @@ Les heures sont écrites comme un nombre décimal pour fonctionner avec le réca
 
 Dans `.env`, adaptez `MEMBER_THOMAS`, `MEMBER_LUCAS` et `MEMBER_NATHAN` aux noms d'affichage réels des auteurs Discord. La comparaison ignore les majuscules/minuscules, mais le nom doit sinon correspondre. Les messages d'un membre non configuré sont refusés et une erreur apparaît dans les logs.
 
-Le bot écrit uniquement dans les trois cellules du bloc concerné. Il ne touche pas au récapitulatif, au graphique ni aux autres onglets. Faites un essai sur une copie du tableur avant la mise en production.
+Dans l'onglet individuel, le bot écrit uniquement dans les trois cellules du bloc du membre concerné. Il ajoute aussi les heures dans WBS. Il ne touche pas au récapitulatif ni au graphique. Faites un essai sur une copie du tableur avant la mise en production.
+
+### Ajout des heures dans WBS
+
+La commande propose les tâches de la colonne D de l'onglet `WBS` à partir de la ligne 2. Après sélection, la durée est ajoutée au total de la colonne K sur cette même ligne. La valeur déjà présente en K doit être numérique ou vide.
+
+Les paramètres facultatifs sont `GOOGLE_WBS_WORKSHEET_NAME` (défaut : `WBS`) et `GOOGLE_WBS_DATA_START_ROW` (défaut : `2`). Vérifiez la structure et faites un essai sur une copie du tableur avant la mise en production.
