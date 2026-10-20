@@ -9,7 +9,7 @@ STARTUP_WAIT_SECONDS="${STARTUP_WAIT_SECONDS:-10}"
 
 cd "$ROOT_DIR"
 
-for command in git docker; do
+for command in docker; do
     if ! command -v "$command" >/dev/null 2>&1; then
         echo "Required command not found: $command" >&2
         exit 1
@@ -23,21 +23,7 @@ for file in .env service-account.json Dockerfile; do
     fi
 done
 
-if ! git diff --quiet || ! git diff --cached --quiet; then
-    echo "Tracked local changes found. Commit or stash them before updating." >&2
-    exit 1
-fi
-
-if ! git rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
-    echo "This branch has no upstream Git branch configured." >&2
-    exit 1
-fi
-
-echo "Pulling the latest fast-forward update..."
-git pull --ff-only
-
-COMMIT="$(git rev-parse --short HEAD)"
-IMAGE_TAG="${IMAGE_NAME}:${COMMIT}"
+IMAGE_TAG="${IMAGE_NAME}:local"
 echo "Building image ${IMAGE_TAG}..."
 docker build -t "$IMAGE_TAG" "$ROOT_DIR"
 

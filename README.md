@@ -126,7 +126,7 @@ chmod +x update-bot.sh
 ./update-bot.sh
 ```
 
-Le script fait un `git pull --ff-only`, construit une image taguée avec le commit, remplace le conteneur en conservant les fichiers `.env` et `service-account.json` du dossier, puis vérifie que le bot reste démarré. Si le nouveau conteneur échoue à démarrer, il restaure l'ancien. L'ancien conteneur est conservé sous `discord-activity-bot-previous` jusqu'à la prochaine mise à jour réussie. Le script refuse de faire le pull si des fichiers suivis ont des changements locaux non commités.
+Le script ne fait aucune opération Git : il construit une image Docker depuis les fichiers déjà présents sur le serveur, remplace le conteneur en conservant les fichiers `.env` et `service-account.json` du dossier, puis vérifie que le bot reste démarré. Si le nouveau conteneur échoue à démarrer, il restaure l'ancien. L'ancien conteneur est conservé sous `discord-activity-bot-previous` jusqu'à la prochaine mise à jour réussie. Transférez ou mettez à jour le code sur le serveur avant de lancer le script.
 
 ## Notes techniques
 
