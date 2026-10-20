@@ -14,10 +14,12 @@ Le bot confirme dans le salon l'enregistrement et met à jour l'onglet individue
 
 ## Générer un Gantt
 
-Dans le salon configuré, utilisez `/gantt` avec :
+Dans le salon configuré, utilisez `/gantt` avec le mode `Prévu` ou `Réel`. Les dates sont facultatives :
 
-- `debut` et `fin` au format `JJ/MM/AAAA` (période maximale : 366 jours).
-- `mode` : `Prévu` ou `Réel`.
+- `debut` : facultatif, au format `JJ/MM/AAAA`.
+- `fin` : facultative, au format `JJ/MM/AAAA`.
+- Vous pouvez préciser les deux dates, une seule, ou aucune. En mode prévu, une borne omise est déduite des dates minimales/maximales du WBS (« Commencer avant » / « Finir avant »). En mode réel, elle est déduite du premier/dernier enregistrement d'heures.
+- Si aucune donnée ne permet de calculer une borne omise, le bot demande de la fournir. La période maximale est de 366 jours.
 
 Le mode prévu lit l'ID (A), les dépendances (B, un ou plusieurs ID séparés par des virgules), l'intitulé (D), l'estimation avec marge (G), les personnes affectées (H) et les dates limites de début/fin (I/J). Il génère un calendrier au plus tard, en jours ouvrés, et n'affiche que les tâches dont le calendrier chevauche la période demandée. Le chemin critique mis en évidence est le plus long chemin du graphe de dépendances, calculé à partir des durées estimées; les dates I/J placent les tâches, mais ne changent pas ce calcul.
 
@@ -87,7 +89,7 @@ pip install -r requirements.txt
 python bot.py
 ```
 
-Dans le salon surveillé, utilisez `/activite`, choisissez une durée et sélectionnez une tâche dans la liste proposée. Vérifiez que la ligne apparaît dans le bon bloc membre et que le total de la même tâche augmente dans WBS. Testez aussi `/gantt` en modes prévu et réel. Les commandes slash peuvent prendre quelques minutes à apparaître après leur synchronisation globale.
+Dans le salon surveillé, utilisez `/activite`, choisissez une durée et sélectionnez une tâche dans la liste proposée. Vérifiez que la ligne apparaît dans le bon bloc membre et que le total de la même tâche augmente dans WBS. Testez aussi `/gantt` en modes prévu et réel. Au démarrage, les commandes slash sont synchronisées dans le serveur du salon configuré.
 
 ## 5. Déployer en continu avec Docker
 

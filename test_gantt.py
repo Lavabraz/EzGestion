@@ -5,6 +5,7 @@ from gantt import (
     WorkCalendar,
     aggregate_actuals,
     french_public_holidays,
+    infer_period_bounds,
     parse_sheet_date,
     parse_wbs_tasks,
     plan_tasks,
@@ -84,6 +85,36 @@ class GanttTests(unittest.TestCase):
         )
         self.assertEqual(totals["1"][date(2026, 10, 21)], 2)
         self.assertEqual(warnings, ["Analyse (1.5 h non attribuées)"])
+
+    def test_period_bounds_are_inferred_from_wbs_or_actual_records(self):
+        tasks = parse_wbs_tasks([
+            [1, "", "", "A", 7, 0, 7, "Lucas", "2026-10-20", "2026-10-25", 0],
+            [2, "", "", "B", 7, 0, 7, "Nathan", "2026-10-22", "2026-10-30", 0],
+        ])
+        wbs_period = infer_period_bounds("prevu", tasks, [], None, date(2026, 11, 2))
+        self.assertEqual(wbs_period, (date(2026, 10, 20), date(2026, 11, 2)))
+        wbs_end_only = infer_period_bounds("prevu", tasks, [], date(2026, 10, 21), None)
+        self.assertEqual(wbs_end_only, (date(2026, 10, 21), date(2026, 10, 30)))
+
+        actuals = [
+            ("2026-10-19", 1, "A"),
+            ("2026-10-28", 2, "B"),
+        ]
+        actual_period = infer_period_bounds("reel", tasks, actuals, None, None)
+        self.assertEqual(actual_period, (date(2026, 10, 19), date(2026, 10, 28)))
+        actual_start_only = infer_period_bounds(
+            "reel", tasks, actuals, date(2026, 10, 20), None
+        )
+        self.assertEqual(actual_start_only, (date(2026, 10, 20), date(2026, 10, 28)))
+
+    def test_period_inference_reports_missing_dates(self):
+        tasks = parse_wbs_tasks([
+            [1, "", "", "A", 7, 0, 7, "Lucas", "", "", 0],
+        ])
+        with self.assertRaisesRegex(ValueError, "renseignez le paramètre « debut »"):
+            infer_period_bounds("prevu", tasks, [], None, date(2026, 10, 31))
+        with self.assertRaisesRegex(ValueError, "renseignez le paramètre « fin »"):
+            infer_period_bounds("reel", tasks, [], date(2026, 10, 1), None)
 
     def test_actual_mode_keeps_working_if_planning_data_is_invalid(self):
         tasks = parse_wbs_tasks(

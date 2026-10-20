@@ -440,6 +440,54 @@ def aggregate_actuals(
     return totals, warnings
 
 
+def infer_period_bounds(
+    mode: str,
+    tasks: list[WbsTask],
+    activity_rows: list[tuple[str, str, str]],
+    start: date | None,
+    end: date | None,
+) -> tuple[date, date]:
+    if mode == "prevu":
+        inferred_starts = [
+            task.start_deadline for task in tasks if task.start_deadline is not None
+        ]
+        inferred_ends = [
+            task.finish_deadline for task in tasks if task.finish_deadline is not None
+        ]
+        earliest = min(inferred_starts, default=None)
+        latest = max(inferred_ends, default=None)
+        source = "les dates « Commencer avant » et « Finir avant » du WBS"
+    else:
+        activity_dates = []
+        for row_day, row_hours, _ in activity_rows:
+            if row_day in (None, "") or row_hours in (None, ""):
+                continue
+            activity_day = parse_sheet_date(row_day)
+            if activity_day is not None:
+                activity_dates.append(activity_day)
+        earliest = min(activity_dates, default=None)
+        latest = max(activity_dates, default=None)
+        source = "les enregistrements d'heures"
+
+    if start is None:
+        if earliest is None:
+            raise ValueError(
+                f"Impossible de déduire la date de début depuis {source}; "
+                "renseignez le paramètre « debut »."
+            )
+        start = earliest
+    if end is None:
+        if latest is None:
+            raise ValueError(
+                f"Impossible de déduire la date de fin depuis {source}; "
+                "renseignez le paramètre « fin »."
+            )
+        end = latest
+    if end < start:
+        raise ValueError("La date de fin doit être égale ou postérieure à la date de début.")
+    return start, end
+
+
 def render_gantt(
     tasks: list[WbsTask],
     activity_rows: list[tuple[str, str, str]],
@@ -640,6 +688,7 @@ def render_gantt(
             label="Heures enregistrées dans une journée",
         )
 
+    subtitle = f"Période {period_start:%d/%m/%Y} au {period_end:%d/%m/%Y}. {subtitle}"
     figure.text(0.01, 0.005, subtitle, fontsize=8, wrap=True)
     output = BytesIO()
     figure.savefig(output, format="png", dpi=150)

@@ -14,6 +14,7 @@ from gantt import (
     WorkCalendar,
     configured_vacations,
     french_public_holidays,
+    infer_period_bounds,
     parse_wbs_tasks,
     render_gantt,
 )
@@ -50,9 +51,21 @@ async def refresh_wbs_task_cache():
 
 class ActivityBot(commands.Bot):
     async def setup_hook(self):
-        await self.tree.sync()
+        channel = await self.fetch_channel(int(CHANNEL_ID))
+        guild = getattr(channel, "guild", None)
+        if guild is None:
+            raise RuntimeError(
+                "DISCORD_CHANNEL_ID doit désigner un salon appartenant à un serveur."
+            )
+        guild_ref = discord.Object(id=guild.id)
+        self.tree.copy_global_to(guild=guild_ref)
+        synced = await self.tree.sync(guild=guild_ref)
         refresh_wbs_task_cache.start()
-        log.info("Commandes Discord synchronisées")
+        log.info(
+            "%d commande(s) Discord synchronisée(s) dans le serveur %s",
+            len(synced),
+            guild.id,
+        )
 
 
 client = ActivityBot(command_prefix="!", intents=intents)
@@ -155,13 +168,20 @@ def _parse_gantt_date(value: str, field_name: str) -> date:
         ) from error
 
 
-def _make_gantt(start: date, end: date, mode: str) -> tuple[BytesIO, str]:
+def _make_gantt(
+    start: date | None,
+    end: date | None,
+    mode: str,
+) -> tuple[BytesIO, str]:
     wbs_rows, activity_rows = writer.read_gantt_data()
     tasks = parse_wbs_tasks(
         wbs_rows,
         writer.wbs_start_row,
         tolerate_planning_errors=mode == "reel",
     )
+    start, end = infer_period_bounds(mode, tasks, activity_rows, start, end)
+    if (end - start).days > 365:
+        raise ValueError("La période demandée ne peut pas dépasser 366 jours.")
     years = range(start.year, end.year + 1)
     holidays = set().union(*(french_public_holidays(year) for year in years))
     calendar = WorkCalendar(holidays, configured_vacations())
@@ -178,9 +198,9 @@ def _make_gantt(start: date, end: date, mode: str) -> tuple[BytesIO, str]:
 
 @client.tree.command(name="gantt", description="Générer un Gantt WBS sur une période")
 @app_commands.describe(
-    debut="Début de la période, au format JJ/MM/AAAA",
-    fin="Fin de la période, au format JJ/MM/AAAA",
     mode="Heures prévues ou heures réellement enregistrées",
+    debut="Début au format JJ/MM/AAAA (par défaut : première date du WBS ou des activités)",
+    fin="Fin au format JJ/MM/AAAA (par défaut : dernière date du WBS ou des activités)",
 )
 @app_commands.choices(mode=[
     app_commands.Choice(name="Prévu", value="prevu"),
@@ -188,9 +208,9 @@ def _make_gantt(start: date, end: date, mode: str) -> tuple[BytesIO, str]:
 ])
 async def gantt(
     interaction: discord.Interaction,
-    debut: str,
-    fin: str,
     mode: str,
+    debut: str | None = None,
+    fin: str | None = None,
 ):
     if str(interaction.channel_id) != CHANNEL_ID:
         await interaction.response.send_message(
@@ -199,12 +219,13 @@ async def gantt(
         return
 
     try:
-        period_start = _parse_gantt_date(debut, "début")
-        period_end = _parse_gantt_date(fin, "fin")
-        if period_end < period_start:
-            raise ValueError("La date de fin doit être égale ou postérieure à la date de début.")
-        if (period_end - period_start).days > 365:
-            raise ValueError("La période demandée ne peut pas dépasser 366 jours.")
+        period_start = _parse_gantt_date(debut, "début") if debut else None
+        period_end = _parse_gantt_date(fin, "fin") if fin else None
+        if period_start and period_end:
+            if period_end < period_start:
+                raise ValueError("La date de fin doit être égale ou postérieure à la date de début.")
+            if (period_end - period_start).days > 365:
+                raise ValueError("La période demandée ne peut pas dépasser 366 jours.")
         hours_per_person_per_day = float(os.getenv("GANTT_HOURS_PER_PERSON_PER_DAY", "7"))
         if not math.isfinite(hours_per_person_per_day) or hours_per_person_per_day <= 0:
             raise ValueError("GANTT_HOURS_PER_PERSON_PER_DAY doit être supérieur à zéro.")
