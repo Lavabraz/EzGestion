@@ -1,5 +1,6 @@
 import unittest
 from datetime import date
+import struct
 
 from gantt import (
     WorkCalendar,
@@ -10,6 +11,7 @@ from gantt import (
     parse_wbs_tasks,
     plan_tasks,
     render_gantt,
+    render_timeline,
 )
 
 
@@ -153,8 +155,26 @@ class GanttTests(unittest.TestCase):
                 self.calendar,
             )
             self.assertTrue(image.getvalue().startswith(b"\x89PNG"))
+            self.assertGreater(len(image.getvalue()), 1000)
             self.assertTrue(description)
             image.close()
+
+    def test_renders_chronological_timeline(self):
+        tasks = parse_wbs_tasks([
+            [1, "", "", "Analyse", 7, 0, 7, "Lucas", "", "", 0],
+            [2, "1", "", "Développement", 14, 0, 14, "Lucas", "", "", 0],
+        ])
+        image, description = render_timeline(
+            tasks,
+            date(2026, 10, 19),
+            date(2026, 11, 6),
+            self.calendar,
+        )
+        self.assertTrue(image.getvalue().startswith(b"\x89PNG"))
+        self.assertGreaterEqual(struct.unpack(">I", image.getvalue()[16:20])[0], 2600)
+        self.assertIn("Frise chronologique", description)
+        self.assertIn("triées par début prévisionnel", description)
+        image.close()
 
 
 if __name__ == "__main__":

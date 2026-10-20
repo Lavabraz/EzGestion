@@ -7,6 +7,7 @@ import math
 import os
 import re
 from functools import lru_cache
+from textwrap import shorten
 from typing import Iterable
 
 import matplotlib
@@ -488,7 +489,7 @@ def infer_period_bounds(
     return start, end
 
 
-def render_gantt(
+def _render_gantt(
     tasks: list[WbsTask],
     activity_rows: list[tuple[str, str, str]],
     period_start: date,
@@ -496,6 +497,9 @@ def render_gantt(
     mode: str,
     calendar: WorkCalendar,
     hours_per_person_per_day: float = 7.0,
+    *,
+    chart_title: str,
+    chronological: bool = False,
 ) -> tuple[BytesIO, str]:
     if not tasks:
         raise ValueError("Aucune tâche avec ID et intitulé n'a été trouvée dans le WBS.")
@@ -531,18 +535,53 @@ def render_gantt(
             if item.start <= period_end and item.finish >= period_start
         ]
 
+    planned_by_id = {item.task.task_id: item for item in planned}
+    if chronological:
+        display_tasks.sort(
+            key=lambda task: (
+                planned_by_id[task.task_id].start,
+                planned_by_id[task.task_id].finish,
+                task.task_id,
+            )
+        )
+
     figure_height = max(4.2, 0.42 * len(display_tasks) + 2.2)
-    figure = Figure(figsize=(14, figure_height), constrained_layout=True)
+    figure = Figure(figsize=(18, figure_height))
     FigureCanvasAgg(figure)
-    axis = figure.add_subplot(1, 1, 1)
+    grid = figure.add_gridspec(
+        1,
+        2,
+        width_ratios=(1, 4),
+        left=0.025,
+        right=0.99,
+        top=0.88,
+        bottom=0.16,
+        wspace=0.025,
+    )
+    label_axis = figure.add_subplot(grid[0, 0])
+    axis = figure.add_subplot(grid[0, 1], sharey=label_axis)
     y_positions = list(range(len(display_tasks)))
     labels = [
         f"{task.task_id} — {task.name}"
         + (" (CP prévu)" if mode == "reel" and task.task_id in path_ids else "")
         for task in display_tasks
     ]
-    axis.set_yticks(y_positions, labels)
-    axis.invert_yaxis()
+    axis.set_ylim(len(display_tasks) - 0.5, -0.5)
+    label_axis.set_ylim(axis.get_ylim())
+    label_axis.set_xlim(0, 1)
+    label_axis.axis("off")
+    for y_position, label in zip(y_positions, labels):
+        label_axis.text(
+            1,
+            y_position,
+            shorten(label, width=54, placeholder="..."),
+            ha="right",
+            va="center",
+            fontsize=8,
+            clip_on=True,
+        )
+    axis.set_yticks(y_positions)
+    axis.tick_params(axis="y", left=False, labelleft=False)
     axis.set_xlim(
         datetime.combine(period_start, datetime.min.time()),
         datetime.combine(period_end + timedelta(days=1), datetime.min.time()),
@@ -562,8 +601,8 @@ def render_gantt(
                 zorder=0,
             )
         day += timedelta(days=1)
-    axis.set_title(
-        f"Gantt { 'prévisionnel' if mode == 'prevu' else 'réel' } "
+    figure.suptitle(
+        f"{chart_title} { 'prévisionnel' if mode == 'prevu' else 'réel' } "
         f"— {period_start:%d/%m/%Y} au {period_end:%d/%m/%Y}"
     )
 
@@ -582,10 +621,11 @@ def render_gantt(
 
     if mode == "prevu":
         planned_by_id = {
-            item.task.task_id: item
-            for item in planned
-            if item.task.task_id in y_by_id
+            task_id: item for task_id, item in planned_by_id.items()
+            if task_id in y_by_id
         }
+        plot_width_inches = axis.get_position().width * figure.get_figwidth()
+        period_days = (period_end - period_start).days + 1
         for task in display_tasks:
             item = planned_by_id[task.task_id]
             if task.effort_hours == 0:
@@ -600,15 +640,17 @@ def render_gantt(
                 height=0.58,
                 color=color,
             )
-            axis.text(
-                item.start + timedelta(days=width / 2),
-                y_by_id[task.task_id],
-                f"{task.effort_hours:g} h",
-                ha="center",
-                va="center",
-                color="white",
-                fontsize=8,
-            )
+            effort_label = f"{task.effort_hours:g} h"
+            if width * plot_width_inches / period_days >= len(effort_label) * 0.065:
+                axis.text(
+                    item.start + timedelta(days=width / 2),
+                    y_by_id[task.task_id],
+                    effort_label,
+                    ha="center",
+                    va="center",
+                    color="white",
+                    fontsize=8,
+                )
         for task in display_tasks:
             for dependency in task.dependencies:
                 if dependency not in planned_by_id:
@@ -624,7 +666,7 @@ def render_gantt(
         axis.legend(handles=[
             Patch(color="#d1495b", label="Chemin critique"),
             Patch(color="#377eb8", label="Autres tâches"),
-        ], loc="upper right")
+        ], loc="lower center", bbox_to_anchor=(0.5, 1.02), ncol=2, frameon=False)
         visible_path_ids = path_ids & y_by_id.keys()
         subtitle = (
             "Chemin critique dans la période : "
@@ -639,6 +681,8 @@ def render_gantt(
             default=1.0,
         )
         color_map = matplotlib.colormaps["Blues"]
+        plot_width_inches = axis.get_position().width * figure.get_figwidth()
+        period_days = (period_end - period_start).days + 1
         for task in display_tasks:
             days = actuals.get(task.task_id, {})
             if not days:
@@ -653,15 +697,18 @@ def render_gantt(
                     edgecolor="#24527a",
                     linewidth=0.5,
                 ))
-                axis.text(
-                    datetime.combine(actual_day, datetime.min.time()) + timedelta(hours=12),
-                    y_by_id[task.task_id],
-                    f"{hours:g} h",
-                    ha="center",
-                    va="center",
-                    fontsize=7,
-                    color="#111111",
-                )
+                hours_label = f"{hours:g} h"
+                if 0.82 * plot_width_inches / period_days >= len(hours_label) * 0.055:
+                    axis.text(
+                        datetime.combine(actual_day, datetime.min.time())
+                        + timedelta(hours=12),
+                        y_by_id[task.task_id],
+                        hours_label,
+                        ha="center",
+                        va="center",
+                        fontsize=7,
+                        color="#111111",
+                    )
         critical_labels = []
         if path_ids:
             critical_labels = [
@@ -689,8 +736,51 @@ def render_gantt(
         )
 
     subtitle = f"Période {period_start:%d/%m/%Y} au {period_end:%d/%m/%Y}. {subtitle}"
-    figure.text(0.01, 0.005, subtitle, fontsize=8, wrap=True)
+    if chronological:
+        subtitle = "Frise chronologique : tâches triées par début prévisionnel. " + subtitle
+    figure.text(0.025, 0.025, subtitle, fontsize=8, wrap=True)
     output = BytesIO()
     figure.savefig(output, format="png", dpi=150)
     output.seek(0)
     return output, subtitle
+
+
+def render_gantt(
+    tasks: list[WbsTask],
+    activity_rows: list[tuple[str, str, str]],
+    period_start: date,
+    period_end: date,
+    mode: str,
+    calendar: WorkCalendar,
+    hours_per_person_per_day: float = 7.0,
+) -> tuple[BytesIO, str]:
+    return _render_gantt(
+        tasks,
+        activity_rows,
+        period_start,
+        period_end,
+        mode,
+        calendar,
+        hours_per_person_per_day,
+        chart_title="Gantt",
+    )
+
+
+def render_timeline(
+    tasks: list[WbsTask],
+    period_start: date,
+    period_end: date,
+    calendar: WorkCalendar,
+    hours_per_person_per_day: float = 7.0,
+) -> tuple[BytesIO, str]:
+    return _render_gantt(
+        tasks,
+        [],
+        period_start,
+        period_end,
+        "prevu",
+        calendar,
+        hours_per_person_per_day,
+        chart_title="Frise chronologique",
+        chronological=True,
+    )

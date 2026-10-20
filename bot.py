@@ -17,6 +17,7 @@ from gantt import (
     infer_period_bounds,
     parse_wbs_tasks,
     render_gantt,
+    render_timeline,
 )
 from parser import parse_activity
 from sheets import GoogleSheetWriter
@@ -196,6 +197,32 @@ def _make_gantt(
     )
 
 
+def _make_timeline(
+    start: date | None,
+    end: date | None,
+) -> tuple[BytesIO, str]:
+    wbs_rows, _ = writer.read_gantt_data()
+    tasks = parse_wbs_tasks(wbs_rows, writer.wbs_start_row)
+    start, end = infer_period_bounds("prevu", tasks, [], start, end)
+    if (end - start).days > 365:
+        raise ValueError("La période demandée ne peut pas dépasser 366 jours.")
+    years = range(start.year, end.year + 1)
+    holidays = set().union(*(french_public_holidays(year) for year in years))
+    calendar = WorkCalendar(holidays, configured_vacations())
+    hours_per_person_per_day = float(
+        os.getenv("GANTT_HOURS_PER_PERSON_PER_DAY", "7")
+    )
+    if not math.isfinite(hours_per_person_per_day) or hours_per_person_per_day <= 0:
+        raise ValueError("GANTT_HOURS_PER_PERSON_PER_DAY doit être supérieur à zéro.")
+    return render_timeline(
+        tasks,
+        start,
+        end,
+        calendar,
+        hours_per_person_per_day,
+    )
+
+
 @client.tree.command(name="gantt", description="Générer un Gantt WBS sur une période")
 @app_commands.describe(
     mode="Heures prévues ou heures réellement enregistrées",
@@ -246,6 +273,58 @@ async def gantt(
     await interaction.followup.send(
         content=description[:1900],
         file=discord.File(image, filename="gantt.png"),
+    )
+
+
+@client.tree.command(
+    name="frise",
+    description="Générer une frise chronologique des tâches WBS",
+)
+@app_commands.describe(
+    debut="Début au format JJ/MM/AAAA (par défaut : première date du WBS)",
+    fin="Fin au format JJ/MM/AAAA (par défaut : dernière date du WBS)",
+)
+async def frise(
+    interaction: discord.Interaction,
+    debut: str | None = None,
+    fin: str | None = None,
+):
+    if str(interaction.channel_id) != CHANNEL_ID:
+        await interaction.response.send_message(
+            "Cette commande est disponible uniquement dans le salon configuré."
+        )
+        return
+
+    try:
+        period_start = _parse_gantt_date(debut, "début") if debut else None
+        period_end = _parse_gantt_date(fin, "fin") if fin else None
+        if period_start and period_end:
+            if period_end < period_start:
+                raise ValueError(
+                    "La date de fin doit être égale ou postérieure à la date de début."
+                )
+            if (period_end - period_start).days > 365:
+                raise ValueError("La période demandée ne peut pas dépasser 366 jours.")
+    except ValueError as error:
+        await interaction.response.send_message(f"Paramètres invalides : {error}")
+        return
+
+    await interaction.response.defer(thinking=True)
+    try:
+        image, description = await asyncio.to_thread(
+            _make_timeline, period_start, period_end
+        )
+    except Exception as error:
+        log.exception(
+            "Échec de génération de la frise, interaction_id=%s",
+            interaction.id,
+        )
+        await interaction.followup.send(f"Impossible de générer la frise : {error}")
+        return
+
+    await interaction.followup.send(
+        content=description[:1900],
+        file=discord.File(image, filename="frise.png"),
     )
 
 

@@ -21,7 +21,11 @@ Dans le salon configuré, utilisez `/gantt` avec le mode `Prévu` ou `Réel`. Le
 - Vous pouvez préciser les deux dates, une seule, ou aucune. En mode prévu, une borne omise est déduite des dates minimales/maximales du WBS (« Commencer avant » / « Finir avant »). En mode réel, elle est déduite du premier/dernier enregistrement d'heures.
 - Si aucune donnée ne permet de calculer une borne omise, le bot demande de la fournir. La période maximale est de 366 jours.
 
+La commande `/frise` génère une frise chronologique des tâches WBS, triées selon leur début prévisionnel. Elle reprend les mêmes paramètres facultatifs `debut` et `fin` que `/gantt`; les bornes omises sont déduites des dates du WBS.
+
 Le mode prévu lit l'ID (A), les dépendances (B, un ou plusieurs ID séparés par des virgules), l'intitulé (D), l'estimation avec marge (G), les personnes affectées (H) et les dates limites de début/fin (I/J). Il génère un calendrier au plus tard, en jours ouvrés, et n'affiche que les tâches dont le calendrier chevauche la période demandée. Le chemin critique mis en évidence est le plus long chemin du graphe de dépendances, calculé à partir des durées estimées; les dates I/J placent les tâches, mais ne changent pas ce calcul.
+
+Les deux graphiques séparent désormais les intitulés de la zone de calendrier afin de donner davantage de place aux dates et aux barres. Les intitulés très longs sont raccourcis dans l’image pour éviter qu’ils se chevauchent.
 
 Le mode réel représente les heures datées de l'onglet individuel dans la période choisie et affiche les tâches ayant une activité réelle à cette période. Les activités sont associées à une tâche par son intitulé exact; si plusieurs tâches ont le même intitulé, les heures correspondantes sont signalées comme non attribuées. Dans ce mode, le chemin critique affiché est celui du planning prévisionnel, pas un chemin critique recalculé à partir des heures historiques. Si les données prévisionnelles sont invalides, les heures réelles restent affichées et le chemin critique est signalé comme indisponible.
 
