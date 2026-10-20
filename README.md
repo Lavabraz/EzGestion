@@ -128,6 +128,8 @@ chmod +x update-bot.sh
 
 Le script ne fait aucune opération Git : il construit une image Docker depuis les fichiers déjà présents sur le serveur, remplace le conteneur en conservant les fichiers `.env` et `service-account.json` du dossier, puis vérifie que le bot reste démarré. Si le nouveau conteneur échoue à démarrer, il restaure l'ancien. L'ancien conteneur est conservé sous `discord-activity-bot-previous` jusqu'à la prochaine mise à jour réussie. Transférez ou mettez à jour le code sur le serveur avant de lancer le script.
 
+La connexion à Google Sheets est initialisée en arrière-plan après le démarrage Discord. Si les logs indiquent une erreur réseau vers Google, les commandes Discord restent disponibles, mais les opérations qui lisent ou écrivent dans le tableur échouent tant que l'accès réseau n'est pas rétabli.
+
 ## Notes techniques
 
 - Les tâches de la colonne D de WBS sont rechargées au démarrage puis toutes les cinq minutes pour alimenter l'autocomplétion. Le bot vérifie que la ligne sélectionnée n'a pas changé avant d'enregistrer.

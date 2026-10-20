@@ -2,6 +2,7 @@ import asyncio
 import logging
 import math
 import os
+import threading
 from datetime import date, datetime
 from io import BytesIO
 
@@ -38,20 +39,42 @@ if not DISCORD_TOKEN:
 if not CHANNEL_ID.isdigit():
     raise RuntimeError("DISCORD_CHANNEL_ID doit être l'identifiant numérique du salon Discord.")
 
-writer = GoogleSheetWriter()
+_writer: GoogleSheetWriter | None = None
+_writer_lock = threading.Lock()
+
+
+def _get_writer() -> GoogleSheetWriter:
+    global _writer
+    with _writer_lock:
+        if _writer is None:
+            log.info("Connexion à Google Sheets...")
+            _writer = GoogleSheetWriter()
+            log.info("Connexion à Google Sheets établie.")
+        return _writer
+
+
+def _refresh_wbs_tasks() -> None:
+    _get_writer().refresh_wbs_tasks()
+
+
+def _write_activity(record: dict, wbs_row: int) -> str:
+    return _get_writer().write_activity(record, wbs_row)
+
+
 intents = discord.Intents.default()
 
 
 @tasks.loop(minutes=5)
 async def refresh_wbs_task_cache():
     try:
-        await asyncio.to_thread(writer.refresh_wbs_tasks)
+        await asyncio.to_thread(_refresh_wbs_tasks)
     except Exception:
         log.exception("Impossible de rafraîchir les tâches WBS pour l'autocomplétion")
 
 
 class ActivityBot(commands.Bot):
     async def setup_hook(self):
+        log.info("Connexion à Discord et synchronisation des commandes...")
         channel = await self.fetch_channel(int(CHANNEL_ID))
         guild = getattr(channel, "guild", None)
         if guild is None:
@@ -128,7 +151,7 @@ async def activite(
 
     await interaction.response.defer(thinking=True)
     try:
-        task_name = await asyncio.to_thread(writer.write_activity, record, wbs_row)
+        task_name = await asyncio.to_thread(_write_activity, record, wbs_row)
     except Exception:
         log.exception(
             "Échec d'écriture Google Sheets pour interaction_id=%s",
@@ -154,9 +177,11 @@ async def autocomplete_tache(
 ) -> list[app_commands.Choice[str]]:
     if str(interaction.channel_id) != CHANNEL_ID:
         return []
+    if _writer is None:
+        return []
     return [
         app_commands.Choice(name=f"{row} — {task_name}"[:100], value=str(row))
-        for row, task_name in writer.get_wbs_task_choices(current)
+        for row, task_name in _writer.get_wbs_task_choices(current)
     ]
 
 
@@ -174,10 +199,11 @@ def _make_gantt(
     end: date | None,
     mode: str,
 ) -> tuple[BytesIO, str]:
-    wbs_rows, activity_rows = writer.read_gantt_data()
+    sheet_writer = _get_writer()
+    wbs_rows, activity_rows = sheet_writer.read_gantt_data()
     tasks = parse_wbs_tasks(
         wbs_rows,
-        writer.wbs_start_row,
+        sheet_writer.wbs_start_row,
         tolerate_planning_errors=mode == "reel",
     )
     start, end = infer_period_bounds(mode, tasks, activity_rows, start, end)
@@ -201,8 +227,9 @@ def _make_timeline(
     start: date | None,
     end: date | None,
 ) -> tuple[BytesIO, str]:
-    wbs_rows, _ = writer.read_gantt_data()
-    tasks = parse_wbs_tasks(wbs_rows, writer.wbs_start_row)
+    sheet_writer = _get_writer()
+    wbs_rows, _ = sheet_writer.read_gantt_data()
+    tasks = parse_wbs_tasks(wbs_rows, sheet_writer.wbs_start_row)
     start, end = infer_period_bounds("prevu", tasks, [], start, end)
     if (end - start).days > 365:
         raise ValueError("La période demandée ne peut pas dépasser 366 jours.")
