@@ -113,6 +113,17 @@ docker logs -f discord-activity-bot
 
 Ne publiez jamais `.env`, le token Discord ou la clé JSON dans Git, un dépôt public, ou un message Discord.
 
+### Mettre à jour le bot sur le serveur
+
+Dans le dossier du dépôt sur le serveur, donnez les droits d'exécution au script puis lancez-le :
+
+```bash
+chmod +x update-bot.sh
+./update-bot.sh
+```
+
+Le script fait un `git pull --ff-only`, construit une image taguée avec le commit, remplace le conteneur en conservant les fichiers `.env` et `service-account.json` du dossier, puis vérifie que le bot reste démarré. Si le nouveau conteneur échoue à démarrer, il restaure l'ancien. L'ancien conteneur est conservé sous `discord-activity-bot-previous` jusqu'à la prochaine mise à jour réussie. Le script refuse de faire le pull si des fichiers suivis ont des changements locaux non commités.
+
 ## Notes techniques
 
 - Les tâches de la colonne D de WBS sont rechargées au démarrage puis toutes les cinq minutes pour alimenter l'autocomplétion. Le bot vérifie que la ligne sélectionnée n'a pas changé avant d'enregistrer.
