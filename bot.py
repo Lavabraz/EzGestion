@@ -226,11 +226,16 @@ def _make_gantt(
 def _make_timeline(
     start: date | None,
     end: date | None,
+    mode: str,
 ) -> tuple[BytesIO, str]:
     sheet_writer = _get_writer()
-    wbs_rows, _ = sheet_writer.read_gantt_data()
-    tasks = parse_wbs_tasks(wbs_rows, sheet_writer.wbs_start_row)
-    start, end = infer_period_bounds("prevu", tasks, [], start, end)
+    wbs_rows, activity_rows = sheet_writer.read_gantt_data()
+    tasks = parse_wbs_tasks(
+        wbs_rows,
+        sheet_writer.wbs_start_row,
+        tolerate_planning_errors=mode == "reel",
+    )
+    start, end = infer_period_bounds(mode, tasks, activity_rows, start, end)
     if (end - start).days > 365:
         raise ValueError("La période demandée ne peut pas dépasser 366 jours.")
     years = range(start.year, end.year + 1)
@@ -247,6 +252,8 @@ def _make_timeline(
         end,
         calendar,
         hours_per_person_per_day,
+        mode,
+        activity_rows,
     )
 
 
@@ -305,14 +312,20 @@ async def gantt(
 
 @client.tree.command(
     name="frise",
-    description="Générer une frise chronologique des tâches WBS",
+    description="Générer une frise chronologique prévue ou réelle",
 )
 @app_commands.describe(
-    debut="Début au format JJ/MM/AAAA (par défaut : première date du WBS)",
-    fin="Fin au format JJ/MM/AAAA (par défaut : dernière date du WBS)",
+    mode="Frise prévisionnelle ou basée sur les heures réellement saisies",
+    debut="Début au format JJ/MM/AAAA (par défaut : première date disponible)",
+    fin="Fin au format JJ/MM/AAAA (par défaut : dernière date disponible)",
 )
+@app_commands.choices(mode=[
+    app_commands.Choice(name="Prévu", value="prevu"),
+    app_commands.Choice(name="Réel", value="reel"),
+])
 async def frise(
     interaction: discord.Interaction,
+    mode: str = "prevu",
     debut: str | None = None,
     fin: str | None = None,
 ):
@@ -339,7 +352,7 @@ async def frise(
     await interaction.response.defer(thinking=True)
     try:
         image, description = await asyncio.to_thread(
-            _make_timeline, period_start, period_end
+            _make_timeline, period_start, period_end, mode
         )
     except Exception as error:
         log.exception(

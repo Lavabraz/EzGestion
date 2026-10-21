@@ -174,8 +174,30 @@ class GanttTests(unittest.TestCase):
         self.assertTrue(image.getvalue().startswith(b"\x89PNG"))
         self.assertGreaterEqual(struct.unpack(">I", image.getvalue()[16:20])[0], 2600)
         self.assertIn("Frise chronologique", description)
-        self.assertIn("positionnées sur la flèche", description)
-        self.assertIn("durée indiquée sur chaque tâche", description)
+        self.assertIn("positionnées selon leur début prévu", description)
+        self.assertIn("durée ouvrée indiqués sur chaque tâche", description)
+        image.close()
+
+    def test_renders_actual_timeline_without_valid_planning_data(self):
+        tasks = parse_wbs_tasks(
+            [[1, "missing-id", "", "Analyse", "invalid", 0, "invalid", "", "", "", "n/a"]],
+            tolerate_planning_errors=True,
+        )
+        image, description = render_timeline(
+            tasks,
+            date(2026, 10, 19),
+            date(2026, 10, 30),
+            self.calendar,
+            mode="reel",
+            activity_rows=[
+                ("2026-10-20", 2, "Analyse"),
+                ("2026-10-22", 1.5, "[1] Analyse"),
+            ],
+        )
+        self.assertTrue(image.getvalue().startswith(b"\x89PNG"))
+        self.assertIn("Frise chronologique réelle", description)
+        self.assertIn("1 tâche(s)", description)
+        self.assertIn("heures réelles cumulées", description)
         image.close()
 
 

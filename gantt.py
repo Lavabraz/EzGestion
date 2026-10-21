@@ -794,39 +794,79 @@ def render_timeline(
     period_end: date,
     calendar: WorkCalendar,
     hours_per_person_per_day: float = 7.0,
+    mode: str = "prevu",
+    activity_rows: list[tuple[str, str, str]] | None = None,
 ) -> tuple[BytesIO, str]:
     if not tasks:
         raise ValueError("Aucune tâche avec ID et intitulé n'a été trouvée dans le WBS.")
+    if mode not in {"prevu", "reel"}:
+        raise ValueError("Le mode doit être « prevu » ou « reel ».")
 
-    planned = plan_tasks(
-        tasks, period_start, period_end, calendar, hours_per_person_per_day
-    )
-    visible_tasks = sorted(
-        (
-            item for item in planned
+    timeline_items = []
+    unmatched: list[str] = []
+    if mode == "prevu":
+        planned = plan_tasks(
+            tasks, period_start, period_end, calendar, hours_per_person_per_day
+        )
+        timeline_items = [
+            (
+                item.task,
+                item.start,
+                item.finish,
+                item.task.effort_hours,
+                calendar.workday_distance(item.start, item.finish)
+                + int(calendar.is_workday(item.finish))
+                if item.task.effort_hours > 0
+                else 0,
+                item.critical,
+                {},
+            )
+            for item in planned
             if item.start <= period_end and item.finish >= period_start
-        ),
-        key=lambda item: (item.start, item.finish, item.task.task_id),
-    )
-    if not visible_tasks:
-        raise ValueError("Aucune tâche planifiée dans cette période.")
+        ]
+        timeline_items.sort(key=lambda item: (item[1], item[2], item[0].task_id))
+        if not timeline_items:
+            raise ValueError("Aucune tâche planifiée dans cette période.")
+    else:
+        actuals, unmatched = aggregate_actuals(
+            tasks, activity_rows or [], period_start, period_end
+        )
+        task_by_id = {task.task_id: task for task in tasks}
+        for task_id, days in actuals.items():
+            actual_days = sorted(days)
+            if not actual_days:
+                continue
+            task = task_by_id[task_id]
+            timeline_items.append((
+                task,
+                actual_days[0],
+                actual_days[-1],
+                sum(days.values()),
+                len(actual_days),
+                False,
+                days,
+            ))
+        timeline_items.sort(key=lambda item: (item[1], item[2], item[0].task_id))
 
     labels = []
-    for item in visible_tasks:
+    for task, start, finish, total_hours, duration_days, _, _ in timeline_items:
         task_name = shorten(
-            f"{item.task.task_id} — {item.task.name}",
+            f"{task.task_id} — {task.name}",
             width=34,
             placeholder="...",
         )
-        duration_days = (
-            calendar.workday_distance(item.start, item.finish)
-            + int(calendar.is_workday(item.finish))
-            if item.task.effort_hours > 0
-            else 0
-        )
-        labels.append(
-            f"{task_name} · {item.task.effort_hours:g} h · {duration_days} j ouvrés"
-        )
+        if mode == "prevu":
+            labels.append(
+                f"{task_name} · {total_hours:g} h · {duration_days} j ouvrés"
+            )
+        else:
+            date_range = (
+                f"{start:%d/%m}" if start == finish
+                else f"{start:%d/%m}–{finish:%d/%m}"
+            )
+            labels.append(
+                f"{task_name} · {total_hours:g} h réelles · {date_range}"
+            )
     period_days = (period_end - period_start).days + 1
     figure_width = 18
     axes_width_inches = figure_width * 0.94
@@ -837,8 +877,8 @@ def render_timeline(
     lane_right_edges: list[list[float]] = [[], []]
     lane_assignments: list[tuple[int, int]] = []
     marker_positions = [
-        (item.start - period_start).days + 0.5
-        for item in visible_tasks
+        (item[1] - period_start).days + 0.5
+        for item in timeline_items
     ]
     for index, (position, label_width) in enumerate(zip(marker_positions, label_widths)):
         side = index % 2
@@ -885,14 +925,19 @@ def render_timeline(
             "zorder": 2,
         },
     )
-    colors = {"critical": "#d1495b", "other": "#377eb8"}
+    colors = {"critical": "#d1495b", "other": "#377eb8", "actual": "#079455"}
     for item, label, label_width, (side, lane) in zip(
-        visible_tasks, labels, label_widths, lane_assignments
+        timeline_items, labels, label_widths, lane_assignments
     ):
-        marker_x = datetime.combine(item.start, datetime.min.time()) + timedelta(hours=12)
+        task, task_start, task_finish, _, _, critical, days = item
+        marker_x = datetime.combine(task_start, datetime.min.time()) + timedelta(hours=12)
         y = (lane + 1) * (1 if side == 0 else -1)
-        color = colors["critical"] if item.critical else colors["other"]
-        position = (item.start - period_start).days + 0.5
+        color = (
+            colors["actual"] if mode == "reel"
+            else colors["critical"] if critical
+            else colors["other"]
+        )
+        position = (task_start - period_start).days + 0.5
         half_width = label_width / 2
         alignment = (
             "right" if position + half_width > period_days
@@ -909,6 +954,34 @@ def render_timeline(
             markeredgewidth=1.2,
             zorder=4,
         )
+        if mode == "reel":
+            for actual_day in days:
+                actual_x = (
+                    datetime.combine(actual_day, datetime.min.time())
+                    + timedelta(hours=12)
+                )
+                axis.plot(
+                    actual_x,
+                    0,
+                    marker="o",
+                    markersize=5,
+                    markerfacecolor=color,
+                    markeredgecolor="white",
+                    markeredgewidth=0.7,
+                    zorder=5,
+                )
+            if task_finish > task_start:
+                axis.plot(
+                    [
+                        datetime.combine(task_start, datetime.min.time()) + timedelta(hours=12),
+                        datetime.combine(task_finish, datetime.min.time()) + timedelta(hours=12),
+                    ],
+                    [0, 0],
+                    color=color,
+                    linewidth=3,
+                    alpha=0.7,
+                    zorder=3,
+                )
         axis.plot(
             [marker_x, marker_x],
             [0.08 if side == 0 else -0.08, y * 0.78],
@@ -927,23 +1000,54 @@ def render_timeline(
             color="#101828",
             bbox={
                 "boxstyle": "round,pad=0.45",
-                "facecolor": "#fff4f3" if item.critical else "#eff8ff",
+                "facecolor": (
+                    "#ecfdf3" if mode == "reel"
+                    else "#fff4f3" if critical
+                    else "#eff8ff"
+                ),
                 "edgecolor": color,
                 "linewidth": 0.8,
             },
             zorder=3,
         )
 
-    axis.legend(handles=[
-        Patch(color=colors["critical"], label="Chemin critique"),
-        Patch(color=colors["other"], label="Autres tâches"),
-    ], loc="upper center", bbox_to_anchor=(0.5, 1.12), ncol=2, frameon=False)
-    subtitle = (
-        "Frise chronologique : tâches principales positionnées sur la flèche "
-        "selon leur début prévisionnel, avec durée estimée et ordre chronologique. "
-        f"{len(visible_tasks)} tâche(s) affichée(s) sur la période; durée indiquée "
-        "sur chaque tâche."
-    )
+    if mode == "prevu":
+        axis.legend(handles=[
+            Patch(color=colors["critical"], label="Chemin critique"),
+            Patch(color=colors["other"], label="Autres tâches"),
+        ], loc="upper center", bbox_to_anchor=(0.5, 1.12), ncol=2, frameon=False)
+        subtitle = (
+            "Frise chronologique prévisionnelle : tâches positionnées selon leur "
+            "début prévu; effort et durée ouvrée indiqués sur chaque tâche. "
+            f"{len(timeline_items)} tâche(s) sur la période."
+        )
+    else:
+        axis.legend(
+            handles=[Patch(color=colors["actual"], label="Activité réelle")],
+            loc="upper center",
+            bbox_to_anchor=(0.5, 1.12),
+            frameon=False,
+        )
+        subtitle = (
+            "Frise chronologique réelle : repères sur les jours avec heures saisies, "
+            "positionnés selon la première activité de chaque tâche. "
+            f"{len(timeline_items)} tâche(s), heures réelles cumulées et période "
+            "d'activité indiquées."
+        )
+        if unmatched:
+            subtitle += ". Activités non attribuées : " + "; ".join(unmatched[:5])
+            if len(unmatched) > 5:
+                subtitle += f" (+{len(unmatched) - 5})"
+        if not timeline_items:
+            axis.text(
+                0.5,
+                0.5,
+                "Aucune activité réelle enregistrée dans cette période",
+                ha="center",
+                va="center",
+                transform=axis.transAxes,
+                color="#667085",
+            )
     figure.subplots_adjust(top=0.84, bottom=0.14, left=0.04, right=0.98)
     figure.text(0.025, 0.025, subtitle, fontsize=8, wrap=True)
     output = BytesIO()
