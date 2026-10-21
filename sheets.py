@@ -85,6 +85,18 @@ class GoogleSheetWriter:
             if not query or query in task_name.casefold()
         ][:25]
 
+    def resolve_wbs_selection(self, selection: str) -> int | None:
+        """Resolve an autocomplete row value or an unambiguous exact task name."""
+        try:
+            return int(selection)
+        except ValueError:
+            normalized = selection.strip().casefold()
+            matching_rows = [
+                row for row, task_name in self.wbs_tasks
+                if task_name.casefold() == normalized
+            ]
+            return matching_rows[0] if len(matching_rows) == 1 else None
+
     def read_gantt_data(self):
         wbs_rows = self.wbs_worksheet.get(
             f"A{self.wbs_start_row}:K",

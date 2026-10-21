@@ -54,7 +54,10 @@ def _format_duration(total_minutes: int) -> str:
     return f"{minutes}min"
 
 
-def parse_activity(content: str) -> Optional[Activity]:
+def parse_activity(
+    content: str,
+    activity_date: str | None = None,
+) -> Optional[Activity]:
     """
     Formats acceptés :
       1h30 Développement du système de connexion
@@ -79,20 +82,30 @@ def parse_activity(content: str) -> Optional[Activity]:
     if minutes is None:
         return None
 
-    activity_date = date.today().isoformat()
     task = remainder.strip()
 
-    # Si le dernier groupe ressemble à une date, valider et retirer ce groupe.
-    date_match = re.search(r"(?:^|\s)(\d{1,2}[/-]\d{1,2}[/-]\d{4})\s*$", task)
-    if date_match:
-        raw_date = date_match.group(1)
-        parts = re.split(r"[/-]", raw_date)
-        day, month, year = map(int, parts)
+    if activity_date is not None:
+        date_match = DATE_RE.fullmatch(activity_date)
+        if not date_match:
+            return None
+        day, month, year = map(int, date_match.groups())
         try:
-            activity_date = date(year, month, day).isoformat()
+            resolved_date = date(year, month, day).isoformat()
         except ValueError:
             return None
-        task = task[:date_match.start()].strip()
+    else:
+        resolved_date = date.today().isoformat()
+        # Si le dernier groupe ressemble à une date, valider et retirer ce groupe.
+        date_match = re.search(r"(?:^|\s)(\d{1,2}[/-]\d{1,2}[/-]\d{4})\s*$", task)
+        if date_match:
+            raw_date = date_match.group(1)
+            parts = re.split(r"[/-]", raw_date)
+            day, month, year = map(int, parts)
+            try:
+                resolved_date = date(year, month, day).isoformat()
+            except ValueError:
+                return None
+            task = task[:date_match.start()].strip()
 
     if not task:
         return None
@@ -101,5 +114,5 @@ def parse_activity(content: str) -> Optional[Activity]:
         duration_minutes=minutes,
         duration_text=_format_duration(minutes),
         task=task,
-        activity_date=activity_date,
+        activity_date=resolved_date,
     )

@@ -81,6 +81,7 @@ class ActivityBot(commands.Bot):
             raise RuntimeError(
                 "DISCORD_CHANNEL_ID doit désigner un salon appartenant à un serveur."
             )
+        await asyncio.to_thread(_get_writer)
         guild_ref = discord.Object(id=guild.id)
         self.tree.copy_global_to(guild=guild_ref)
         synced = await self.tree.sync(guild=guild_ref)
@@ -119,18 +120,15 @@ async def activite(
         )
         return
 
-    try:
-        wbs_row = int(tache)
-    except ValueError:
+    wbs_row = _get_writer().resolve_wbs_selection(tache)
+    if wbs_row is None:
         await interaction.response.send_message(
-            "Sélectionne une tâche dans les suggestions d'autocomplétion.",
+            "Sélectionne une tâche dans les suggestions ou saisis son nom exact "
+            "(les doublons doivent être choisis dans les suggestions).",
         )
         return
 
-    activity_input = f"{duree} activité"
-    if date:
-        activity_input += f" {date}"
-    parsed = parse_activity(activity_input)
+    parsed = parse_activity(f"{duree} activité", activity_date=date)
     if parsed is None:
         await interaction.response.send_message(
             "Durée ou date invalide. Utilise une durée comme `1h30` et une date "
