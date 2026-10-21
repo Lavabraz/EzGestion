@@ -7,5 +7,5 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY bot.py parser.py sheets.py gantt.py ./
+COPY bot.py parser.py sheets.py gantt.py recurring_activities.py ./
 CMD ["python", "bot.py"]
