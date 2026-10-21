@@ -3,8 +3,9 @@ import logging
 import math
 import os
 import threading
-from datetime import date, datetime
+from datetime import date, datetime, time
 from io import BytesIO
+from zoneinfo import ZoneInfo
 
 import discord
 from discord import app_commands
@@ -16,11 +17,12 @@ from gantt import (
     configured_vacations,
     french_public_holidays,
     infer_period_bounds,
-    parse_wbs_tasks,
+    parse_gantt_data,
     render_gantt,
     render_timeline,
 )
 from parser import parse_activity
+from recurring_activities import activities_for_date
 from sheets import GoogleSheetWriter
 
 load_dotenv()
@@ -33,6 +35,7 @@ log = logging.getLogger("activity-bot")
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
 CHANNEL_ID = os.getenv("DISCORD_CHANNEL_ID", "").strip()
+PARIS_TIMEZONE = ZoneInfo("Europe/Paris")
 
 if not DISCORD_TOKEN:
     raise RuntimeError("DISCORD_TOKEN est absent du fichier .env")
@@ -72,6 +75,86 @@ async def refresh_wbs_task_cache():
         log.exception("Impossible de rafraîchir les tâches WBS pour l'autocomplétion")
 
 
+def _record_recurring_activities(day: date) -> list[tuple[str, str, int]]:
+    writer = _get_writer()
+    holidays = french_public_holidays(day.year)
+    calendar = WorkCalendar(holidays, configured_vacations())
+    activities = activities_for_date(day, calendar)
+    if not activities:
+        return []
+
+    task_rows = {
+        task_name: writer.resolve_recurring_wbs_task(task_name)
+        for task_name, _ in activities
+    }
+    recorded = []
+    for task_name, minutes in activities:
+        for member in writer.members.values():
+            record = {
+                "date": day.isoformat(),
+                "duration": f"{minutes}min",
+                "duration_hours": minutes / 60,
+                "member": member["display"],
+            }
+            try:
+                if writer.write_recurring_activity(record, task_rows[task_name]):
+                    recorded.append((member["display"], task_name, minutes))
+            except Exception:
+                log.exception(
+                    "Échec d'écriture de l'activité récurrente %r pour %s le %s",
+                    task_name,
+                    member["display"],
+                    day,
+                )
+    log.info(
+        "Activités récurrentes du %s traitées : %d nouvelle(s) entrée(s)",
+        day,
+        len(recorded),
+    )
+    return recorded
+
+
+@tasks.loop(time=time(hour=23, minute=55, tzinfo=PARIS_TIMEZONE))
+async def recurring_activity_task():
+    day = datetime.now(PARIS_TIMEZONE).date()
+    try:
+        recorded = await asyncio.to_thread(_record_recurring_activities, day)
+    except Exception:
+        log.exception("Échec de l'enregistrement des activités récurrentes du %s", day)
+        return
+
+    if not recorded:
+        return
+
+    try:
+        channel = await client.fetch_channel(int(CHANNEL_ID))
+    except Exception:
+        log.exception(
+            "Impossible de récupérer le salon pour confirmer les activités du %s",
+            day,
+        )
+        return
+
+    for member, task_name, minutes in recorded:
+        try:
+            await channel.send(
+                f"Activité automatique enregistrée : **{minutes} min** sur "
+                f"**{task_name}** pour **{member}**, le **{day:%d/%m/%Y}**."
+            )
+        except Exception:
+            log.exception(
+                "Impossible de confirmer dans Discord l'activité %r pour %s le %s",
+                task_name,
+                member,
+                day,
+            )
+
+
+@recurring_activity_task.before_loop
+async def before_recurring_activity_task():
+    await client.wait_until_ready()
+
+
 class ActivityBot(commands.Bot):
     async def setup_hook(self):
         log.info("Connexion à Discord et synchronisation des commandes...")
@@ -86,6 +169,7 @@ class ActivityBot(commands.Bot):
         self.tree.copy_global_to(guild=guild_ref)
         synced = await self.tree.sync(guild=guild_ref)
         refresh_wbs_task_cache.start()
+        recurring_activity_task.start()
         log.info(
             "%d commande(s) Discord synchronisée(s) dans le serveur %s",
             len(synced),
@@ -106,7 +190,7 @@ async def on_ready():
 @app_commands.describe(
     duree="Durée travaillée, par exemple 1h30 ou 45min",
     tache="Tâche à sélectionner dans la liste WBS",
-    date="Date de l'activité au format JJ/MM/AAAA (facultatif)",
+    date="Facultative : JJ/MM/AAAA, AAAA-MM-JJ, JJ/MM, aujourd'hui ou hier",
 )
 async def activite(
     interaction: discord.Interaction,
@@ -131,8 +215,9 @@ async def activite(
     parsed = parse_activity(f"{duree} activité", activity_date=date)
     if parsed is None:
         await interaction.response.send_message(
-            "Durée ou date invalide. Utilise une durée comme `1h30` et une date "
-            "facultative au format `JJ/MM/AAAA`.",
+            "Durée ou date invalide. Utilise une durée comme `1h30` et, si besoin, "
+            "une date comme `21/10/2026`, `2026-10-21`, `21/10`, `aujourd'hui` "
+            "ou `hier`.",
         )
         return
 
@@ -164,7 +249,7 @@ async def activite(
 
     await interaction.followup.send(
         f"Activité enregistrée : **{parsed.duration_text}** sur **{task_name}** "
-        f"le {parsed.activity_date}.",
+        f"le {date.fromisoformat(parsed.activity_date):%d/%m/%Y}.",
     )
 
 
@@ -199,8 +284,9 @@ def _make_gantt(
 ) -> tuple[BytesIO, str]:
     sheet_writer = _get_writer()
     wbs_rows, activity_rows = sheet_writer.read_gantt_data()
-    tasks = parse_wbs_tasks(
+    tasks, activity_rows = parse_gantt_data(
         wbs_rows,
+        activity_rows,
         sheet_writer.wbs_start_row,
         tolerate_planning_errors=mode == "reel",
     )
@@ -228,8 +314,9 @@ def _make_timeline(
 ) -> tuple[BytesIO, str]:
     sheet_writer = _get_writer()
     wbs_rows, activity_rows = sheet_writer.read_gantt_data()
-    tasks = parse_wbs_tasks(
+    tasks, activity_rows = parse_gantt_data(
         wbs_rows,
+        activity_rows,
         sheet_writer.wbs_start_row,
         tolerate_planning_errors=mode == "reel",
     )

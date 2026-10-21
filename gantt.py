@@ -168,6 +168,54 @@ def parse_wbs_tasks(
     return tasks
 
 
+def parse_gantt_data(
+    wbs_rows: Iterable[list],
+    activity_rows: list[tuple[str, str, str]],
+    start_row: int = 2,
+    tolerate_planning_errors: bool = False,
+) -> tuple[list[WbsTask], list[tuple[str, str, str]]]:
+    rows = []
+    meeting_ids = set()
+    for row in wbs_rows:
+        task_name = str(_cell(row, 3)).strip()
+        if task_name.casefold().startswith("réunion"):
+            task_id = _id_text(_cell(row, 0))
+            if task_id:
+                meeting_ids.add(task_id)
+            rows.append([])
+        else:
+            rows.append(list(row))
+
+    for row in rows:
+        if not row:
+            continue
+        raw_dependencies = str(_cell(row, 1)).strip()
+        if raw_dependencies:
+            dependencies = [
+                _id_text(dependency)
+                for dependency in raw_dependencies.split(",")
+                if dependency.strip()
+            ]
+            row[1] = ", ".join(
+                dependency
+                for dependency in dependencies
+                if dependency not in meeting_ids
+            )
+    tasks = parse_wbs_tasks(rows, start_row, tolerate_planning_errors)
+
+    filtered_activities = []
+    for activity in activity_rows:
+        task_name = str(activity[2]).strip()
+        task_id_match = re.match(r"^\[([^\]]+)\]\s*", task_name)
+        if (
+            task_name.casefold().startswith("réunion")
+            or task_id_match and task_id_match.group(1) in meeting_ids
+        ):
+            continue
+        filtered_activities.append(activity)
+    return tasks, filtered_activities
+
+
 @lru_cache(maxsize=None)
 def french_public_holidays(year: int) -> set[date]:
     """Jours fériés nationaux de France métropolitaine."""

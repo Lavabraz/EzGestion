@@ -8,6 +8,7 @@ from gantt import (
     french_public_holidays,
     infer_period_bounds,
     parse_sheet_date,
+    parse_gantt_data,
     parse_wbs_tasks,
     plan_tasks,
     render_gantt,
@@ -32,6 +33,32 @@ class GanttTests(unittest.TestCase):
         self.assertEqual(tasks[2].dependencies, ("1", "2"))
         self.assertEqual(tasks[1].assignees, ("Lucas", "Nathan"))
         self.assertEqual(tasks[2].start_deadline, parse_sheet_date(46300))
+
+    def test_gantt_data_ignores_meetings_and_their_activity(self):
+        tasks, activities = parse_gantt_data(
+            [
+                [1, "", "Lot A", "Analyse", 5, 1.5, 6.5, "Lucas", "", "", 0],
+                [2, "", "Lot A", "Réunion hebdomadaire", "invalid", 0, "invalid"],
+                [3, "2", "Lot A", "Développement", 10, 3, 13, "Lucas", "", "", 0],
+                [4, "", "Lot A", "Compte rendu Réunion", 2, 0, 2, "Lucas", "", "", 0],
+            ],
+            [
+                ("2026-10-20", 1, "Réunion hebdomadaire"),
+                ("2026-10-21", 1, "[2] Autre intitulé"),
+                ("2026-10-22", 2, "[1] Analyse"),
+                ("2026-10-23", 1, "Compte rendu Réunion"),
+            ],
+        )
+
+        self.assertEqual([task.task_id for task in tasks], ["1", "3", "4"])
+        self.assertEqual(tasks[1].dependencies, ())
+        self.assertEqual(
+            activities,
+            [
+                ("2026-10-22", 2, "[1] Analyse"),
+                ("2026-10-23", 1, "Compte rendu Réunion"),
+            ],
+        )
 
     def test_french_holiday_and_vacation_are_non_workdays(self):
         self.assertFalse(self.calendar.is_workday(date(2026, 11, 11)))

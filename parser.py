@@ -1,6 +1,6 @@
 """Analyse les messages du type : 1h30 Développer la connexion 18/10/2026."""
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 import re
 from typing import Optional
 
@@ -10,7 +10,10 @@ DURATION_RE = re.compile(
     r"|(?P<clock>\d{1,2}:\d{2}))\s*$",
     re.IGNORECASE,
 )
-DATE_RE = re.compile(r"^\s*(\d{1,2})[/-](\d{1,2})[/-](\d{4})\s*$")
+FRENCH_DATE_RE = re.compile(
+    r"^\s*(\d{1,2})([./-])(\d{1,2})(?:\2(\d{4}))?\s*$"
+)
+ISO_DATE_RE = re.compile(r"^\s*(\d{4})-(\d{1,2})-(\d{1,2})\s*$")
 
 
 @dataclass(frozen=True)
@@ -54,9 +57,33 @@ def _format_duration(total_minutes: int) -> str:
     return f"{minutes}min"
 
 
+def parse_activity_date(value: str, today: date | None = None) -> date | None:
+    reference_day = today or date.today()
+    normalized = value.strip().casefold()
+    if normalized in {"aujourd'hui", "aujourd’hui", "today"}:
+        return reference_day
+    if normalized in {"hier", "yesterday"}:
+        return reference_day - timedelta(days=1)
+
+    match = ISO_DATE_RE.fullmatch(value)
+    if match:
+        year, month, day = map(int, match.groups())
+    else:
+        match = FRENCH_DATE_RE.fullmatch(value)
+        if not match:
+            return None
+        day, month = int(match.group(1)), int(match.group(3))
+        year = int(match.group(4)) if match.group(4) else reference_day.year
+    try:
+        return date(year, month, day)
+    except ValueError:
+        return None
+
+
 def parse_activity(
     content: str,
     activity_date: str | None = None,
+    today: date | None = None,
 ) -> Optional[Activity]:
     """
     Formats acceptés :
@@ -65,8 +92,9 @@ def parse_activity(
       2h Rédaction du rapport 18/10/2026
       01:30 Revue de code 18-10-2026
 
-    La durée est le premier élément. Une date éventuelle doit être le dernier élément.
-    Le séparateur entre les éléments est un espace, pas un signe +.
+    La durée est le premier élément. Une date éventuelle en fin de message ou
+    dans le paramètre activity_date accepte JJ/MM/AAAA, JJ-MM-AAAA, JJ.MM.AAAA,
+    AAAA-MM-JJ, JJ/MM (année courante), « aujourd'hui » et « hier ».
     """
     if not content or not content.strip():
         return None
@@ -85,26 +113,25 @@ def parse_activity(
     task = remainder.strip()
 
     if activity_date is not None:
-        date_match = DATE_RE.fullmatch(activity_date)
-        if not date_match:
+        resolved_day = parse_activity_date(activity_date, today)
+        if resolved_day is None:
             return None
-        day, month, year = map(int, date_match.groups())
-        try:
-            resolved_date = date(year, month, day).isoformat()
-        except ValueError:
-            return None
+        resolved_date = resolved_day.isoformat()
     else:
-        resolved_date = date.today().isoformat()
-        # Si le dernier groupe ressemble à une date, valider et retirer ce groupe.
-        date_match = re.search(r"(?:^|\s)(\d{1,2}[/-]\d{1,2}[/-]\d{4})\s*$", task)
+        reference_day = today or date.today()
+        resolved_date = reference_day.isoformat()
+        date_match = re.search(
+            r"(?:^|\s)(\d{1,2}[./-]\d{1,2}(?:[./-]\d{4})?"
+            r"|\d{4}-\d{1,2}-\d{1,2}|aujourd'hui|aujourd’hui|hier)\s*$",
+            task,
+            re.IGNORECASE,
+        )
         if date_match:
             raw_date = date_match.group(1)
-            parts = re.split(r"[/-]", raw_date)
-            day, month, year = map(int, parts)
-            try:
-                resolved_date = date(year, month, day).isoformat()
-            except ValueError:
+            resolved_day = parse_activity_date(raw_date, reference_day)
+            if resolved_day is None:
                 return None
+            resolved_date = resolved_day.isoformat()
             task = task[:date_match.start()].strip()
 
     if not task:

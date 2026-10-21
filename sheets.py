@@ -1,6 +1,7 @@
 """Écrit les activités dans les blocs prévus pour chaque membre du Google Sheet."""
 import logging
 import os
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import gspread
@@ -96,6 +97,87 @@ class GoogleSheetWriter:
                 if task_name.casefold() == normalized
             ]
             return matching_rows[0] if len(matching_rows) == 1 else None
+
+    def resolve_recurring_wbs_task(self, task_name: str) -> int:
+        matching_rows = [
+            row for row, name in self.wbs_tasks
+            if name.casefold() == task_name.casefold()
+        ]
+        if len(matching_rows) != 1:
+            raise ValueError(
+                f"La tâche WBS {task_name!r} doit exister une seule fois "
+                "pour enregistrer les activités récurrentes."
+            )
+        return matching_rows[0]
+
+    @staticmethod
+    def _activity_date(value) -> date | None:
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        if isinstance(value, (int, float)):
+            return date(1899, 12, 30) + timedelta(days=int(value))
+        text = str(value).strip()
+        for date_format in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%m/%d/%Y"):
+            try:
+                return datetime.strptime(text, date_format).date()
+            except ValueError:
+                continue
+        return None
+
+    def write_recurring_activity(self, record, wbs_row: int) -> bool:
+        author = str(record.get("member", "")).strip().casefold()
+        member = self.members.get(author)
+        if member is None:
+            raise ValueError(
+                f"Le membre {record.get('member')!r} n'est pas configuré "
+                "pour l'enregistrement des activités récurrentes."
+            )
+
+        task_name = self._wbs_task_at(wbs_row)
+        activity_day = self._activity_date(record["date"])
+        if activity_day is None:
+            raise ValueError(f"Date d'activité récurrente invalide : {record['date']!r}.")
+
+        date_col, duration_col, task_col = member["date"], member["duration"], member["task"]
+        existing_rows = self.worksheet.get(
+            f"{date_col}{self.start_row}:{task_col}",
+            value_render_option="UNFORMATTED_VALUE",
+        )
+        for row in existing_rows:
+            if len(row) < 3:
+                continue
+            if (
+                self._activity_date(row[0]) == activity_day
+                and str(row[2]).strip().casefold() == task_name.casefold()
+            ):
+                log.info(
+                    "Activité récurrente déjà présente pour %s le %s : %s",
+                    member["display"],
+                    activity_day,
+                    task_name,
+                )
+                return False
+
+        row_number = self._next_row(date_col, duration_col, task_col)
+        self.worksheet.update(
+            range_name=f"{date_col}{row_number}:{task_col}{row_number}",
+            values=[[
+                activity_day.isoformat(),
+                record["duration_hours"],
+                task_name,
+            ]],
+            value_input_option="USER_ENTERED",
+        )
+        self._add_wbs_hours(wbs_row, record["duration_hours"])
+        log.info(
+            "Activité récurrente de %s écrite pour %s le %s",
+            member["display"],
+            task_name,
+            activity_day,
+        )
+        return True
 
     def read_gantt_data(self):
         wbs_rows = self.wbs_worksheet.get(

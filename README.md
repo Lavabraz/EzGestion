@@ -8,9 +8,20 @@ Dans le salon Discord configuré, lancez `/activite` et renseignez :
 
 - `duree` : par exemple `1h30`, `45min` ou `01:30`.
 - `tache` : sélectionnez une tâche dans les suggestions; saisissez quelques lettres pour filtrer la liste.
-- `date` : facultative, au format `JJ/MM/AAAA`; par défaut, la date du jour.
+- `date` : facultative. Formats acceptés : `JJ/MM/AAAA`, `JJ-MM-AAAA`, `JJ.MM.AAAA`, `AAAA-MM-JJ`, `JJ/MM` (année courante), `aujourd'hui` ou `hier`. Si elle est omise, la date du jour est utilisée.
 
-Le bot confirme dans le salon l'enregistrement et met à jour l'onglet individuel ainsi que le total de la ligne WBS sélectionnée. Les erreurs et les saisies invalides sont également signalées publiquement dans le salon.
+Une date peut aussi être placée à la fin du champ `duree`, par exemple `1h30 Analyse 2026-10-21` ou `1h30 Analyse hier`. Le bot confirme dans le salon l'enregistrement et affiche la date au format français `JJ/MM/AAAA`. Il met à jour l'onglet individuel ainsi que le total de la ligne WBS sélectionnée. Les erreurs et les saisies invalides sont également signalées publiquement dans le salon.
+
+## Enregistrement automatique des réunions
+
+Chaque jour à 23 h 55 (heure de Paris), le bot ajoute les activités récurrentes pour chaque membre configuré :
+
+- 35 min de « Réunion Hebdo » chaque lundi.
+- 45 min de « Réunion Client » chaque lundi (la cadence hebdomadaire a commencé le 19/10/2026).
+- 30 min de « Réunion Gp » un lundi sur deux, à partir du 02/11/2026.
+- 5 min de « Réunion Daily » les jours ouvrés, sauf le lundi.
+
+Les réunions du lundi sont enregistrées même si ce lundi est férié ou pendant des vacances. Les daily sont exclues les lundis, week-ends, jours fériés français et périodes définies par `GANTT_VACATION_RANGES`. Les dates manquées lorsque le bot est arrêté ne sont pas rattrapées. Chaque activité est écrite dans le bloc individuel du membre et ses heures sont ajoutées à la colonne K de la tâche WBS correspondante. Un message de confirmation est envoyé dans le salon pour chaque activité effectivement ajoutée. Les quatre tâches doivent donc déjà exister dans le WBS sous les noms « Réunion Hebdo », « Réunion Client », « Réunion Gp » et « Réunion Daily ».
 
 ## Générer un Gantt
 
