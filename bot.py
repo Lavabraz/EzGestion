@@ -249,7 +249,7 @@ async def activite(
 
     await interaction.followup.send(
         f"Activité enregistrée : **{parsed.duration_text}** sur **{task_name}** "
-        f"le {date.fromisoformat(parsed.activity_date):%d/%m/%Y}.",
+        f"le {datetime.fromisoformat(parsed.activity_date):%d/%m/%Y}.",
     )
 
 
