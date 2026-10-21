@@ -15,7 +15,7 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.colors import Normalize
 from matplotlib.dates import DateFormatter
 from matplotlib.figure import Figure
-from matplotlib.patches import Patch, Rectangle
+from matplotlib.patches import FancyArrowPatch, Patch, Rectangle
 
 
 @dataclass(frozen=True)
@@ -499,7 +499,6 @@ def _render_gantt(
     hours_per_person_per_day: float = 7.0,
     *,
     chart_title: str,
-    chronological: bool = False,
 ) -> tuple[BytesIO, str]:
     if not tasks:
         raise ValueError("Aucune tâche avec ID et intitulé n'a été trouvée dans le WBS.")
@@ -536,7 +535,7 @@ def _render_gantt(
         ]
 
     planned_by_id = {item.task.task_id: item for item in planned}
-    if chronological:
+    if planned_by_id:
         display_tasks.sort(
             key=lambda task: (
                 planned_by_id[task.task_id].start,
@@ -562,7 +561,8 @@ def _render_gantt(
     axis = figure.add_subplot(grid[0, 1], sharey=label_axis)
     y_positions = list(range(len(display_tasks)))
     labels = [
-        f"{task.task_id} — {task.name}"
+        f"{shorten(f'{task.task_id} — {task.name}', width=45, placeholder='...')} "
+        f"· {task.effort_hours:g} h"
         + (" (CP prévu)" if mode == "reel" and task.task_id in path_ids else "")
         for task in display_tasks
     ]
@@ -657,11 +657,32 @@ def _render_gantt(
                     continue
                 source = planned_by_id[dependency]
                 target = planned_by_id[task.task_id]
+                source_x = source.finish + timedelta(days=1)
+                target_x = target.start
+                route_x = source_x + (target_x - source_x) / 2
+                source_y = y_by_id[dependency]
+                target_y = y_by_id[task.task_id]
+                axis.plot(
+                    [source_x, route_x, route_x],
+                    [source_y, source_y, target_y],
+                    color="#667085",
+                    lw=0.9,
+                    alpha=0.65,
+                    zorder=1,
+                )
                 axis.annotate(
                     "",
-                    xy=(target.start, y_by_id[task.task_id]),
-                    xytext=(source.finish + timedelta(days=1), y_by_id[dependency]),
-                    arrowprops={"arrowstyle": "->", "color": "#444444", "lw": 0.8},
+                    xy=(target_x, target_y),
+                    xytext=(route_x, target_y),
+                    arrowprops={
+                        "arrowstyle": "-|>",
+                        "color": "#667085",
+                        "lw": 0.9,
+                        "alpha": 0.75,
+                        "shrinkA": 0,
+                        "shrinkB": 0,
+                        "zorder": 1,
+                    },
                 )
         axis.legend(handles=[
             Patch(color="#d1495b", label="Chemin critique"),
@@ -735,9 +756,10 @@ def _render_gantt(
             label="Heures enregistrées dans une journée",
         )
 
-    subtitle = f"Période {period_start:%d/%m/%Y} au {period_end:%d/%m/%Y}. {subtitle}"
-    if chronological:
-        subtitle = "Frise chronologique : tâches triées par début prévisionnel. " + subtitle
+    subtitle = (
+        "Durée estimée indiquée à côté de chaque tâche. "
+        f"Période {period_start:%d/%m/%Y} au {period_end:%d/%m/%Y}. {subtitle}"
+    )
     figure.text(0.025, 0.025, subtitle, fontsize=8, wrap=True)
     output = BytesIO()
     figure.savefig(output, format="png", dpi=150)
@@ -773,14 +795,158 @@ def render_timeline(
     calendar: WorkCalendar,
     hours_per_person_per_day: float = 7.0,
 ) -> tuple[BytesIO, str]:
-    return _render_gantt(
-        tasks,
-        [],
-        period_start,
-        period_end,
-        "prevu",
-        calendar,
-        hours_per_person_per_day,
-        chart_title="Frise chronologique",
-        chronological=True,
+    if not tasks:
+        raise ValueError("Aucune tâche avec ID et intitulé n'a été trouvée dans le WBS.")
+
+    planned = plan_tasks(
+        tasks, period_start, period_end, calendar, hours_per_person_per_day
     )
+    visible_tasks = sorted(
+        (
+            item for item in planned
+            if item.start <= period_end and item.finish >= period_start
+        ),
+        key=lambda item: (item.start, item.finish, item.task.task_id),
+    )
+    if not visible_tasks:
+        raise ValueError("Aucune tâche planifiée dans cette période.")
+
+    labels = []
+    for item in visible_tasks:
+        task_name = shorten(
+            f"{item.task.task_id} — {item.task.name}",
+            width=34,
+            placeholder="...",
+        )
+        duration_days = (
+            calendar.workday_distance(item.start, item.finish)
+            + int(calendar.is_workday(item.finish))
+            if item.task.effort_hours > 0
+            else 0
+        )
+        labels.append(
+            f"{task_name} · {item.task.effort_hours:g} h · {duration_days} j ouvrés"
+        )
+    period_days = (period_end - period_start).days + 1
+    figure_width = 18
+    axes_width_inches = figure_width * 0.94
+    label_widths = [
+        min(0.32 * period_days, max(2.0, len(label) * 0.055 * period_days / axes_width_inches))
+        for label in labels
+    ]
+    lane_right_edges: list[list[float]] = [[], []]
+    lane_assignments: list[tuple[int, int]] = []
+    marker_positions = [
+        (item.start - period_start).days + 0.5
+        for item in visible_tasks
+    ]
+    for index, (position, label_width) in enumerate(zip(marker_positions, label_widths)):
+        side = index % 2
+        half_width = label_width / 2
+        lane = 0
+        while lane < len(lane_right_edges[side]) and (
+            position - half_width < lane_right_edges[side][lane] + 0.5
+        ):
+            lane += 1
+        if lane == len(lane_right_edges[side]):
+            lane_right_edges[side].append(float("-inf"))
+        lane_right_edges[side][lane] = position + half_width
+        lane_assignments.append((side, lane))
+
+    lane_count = max((lane + 1 for _, lane in lane_assignments), default=1)
+    figure_height = max(5.5, 2.8 + lane_count * 0.9)
+    figure = Figure(figsize=(figure_width, figure_height))
+    FigureCanvasAgg(figure)
+    axis = figure.add_subplot(1, 1, 1)
+    axis.set_xlim(
+        datetime.combine(period_start - timedelta(days=1), datetime.min.time()),
+        datetime.combine(period_end + timedelta(days=2), datetime.min.time()),
+    )
+    axis.set_ylim(-lane_count - 0.8, lane_count + 0.8)
+    axis.set_yticks([])
+    axis.xaxis_date()
+    date_format = "%d/%m/%Y" if period_start.year != period_end.year else "%d/%m"
+    axis.xaxis.set_major_formatter(DateFormatter(date_format))
+    axis.grid(axis="x", linestyle=":", alpha=0.35)
+    axis.set_xlabel("Date")
+    axis.set_title(f"Frise chronologique — {period_start:%d/%m/%Y} au {period_end:%d/%m/%Y}")
+
+    start_x = datetime.combine(period_start, datetime.min.time())
+    end_x = datetime.combine(period_end + timedelta(days=1), datetime.min.time())
+    axis.annotate(
+        "",
+        xy=(end_x, 0),
+        xytext=(start_x, 0),
+        arrowprops={
+            "arrowstyle": "-|>",
+            "mutation_scale": 18,
+            "linewidth": 2.2,
+            "color": "#344054",
+            "zorder": 2,
+        },
+    )
+    colors = {"critical": "#d1495b", "other": "#377eb8"}
+    for item, label, label_width, (side, lane) in zip(
+        visible_tasks, labels, label_widths, lane_assignments
+    ):
+        marker_x = datetime.combine(item.start, datetime.min.time()) + timedelta(hours=12)
+        y = (lane + 1) * (1 if side == 0 else -1)
+        color = colors["critical"] if item.critical else colors["other"]
+        position = (item.start - period_start).days + 0.5
+        half_width = label_width / 2
+        alignment = (
+            "right" if position + half_width > period_days
+            else "left" if position - half_width < 0
+            else "center"
+        )
+        axis.plot(
+            marker_x,
+            0,
+            marker="o",
+            markersize=8,
+            markerfacecolor=color,
+            markeredgecolor="white",
+            markeredgewidth=1.2,
+            zorder=4,
+        )
+        axis.plot(
+            [marker_x, marker_x],
+            [0.08 if side == 0 else -0.08, y * 0.78],
+            color=color,
+            linewidth=1,
+            alpha=0.8,
+            zorder=1,
+        )
+        axis.text(
+            marker_x,
+            y,
+            label,
+            ha=alignment,
+            va="bottom" if side == 0 else "top",
+            fontsize=8,
+            color="#101828",
+            bbox={
+                "boxstyle": "round,pad=0.45",
+                "facecolor": "#fff4f3" if item.critical else "#eff8ff",
+                "edgecolor": color,
+                "linewidth": 0.8,
+            },
+            zorder=3,
+        )
+
+    axis.legend(handles=[
+        Patch(color=colors["critical"], label="Chemin critique"),
+        Patch(color=colors["other"], label="Autres tâches"),
+    ], loc="upper center", bbox_to_anchor=(0.5, 1.12), ncol=2, frameon=False)
+    subtitle = (
+        "Frise chronologique : tâches principales positionnées sur la flèche "
+        "selon leur début prévisionnel, avec durée estimée et ordre chronologique. "
+        f"{len(visible_tasks)} tâche(s) affichée(s) sur la période; durée indiquée "
+        "sur chaque tâche."
+    )
+    figure.subplots_adjust(top=0.84, bottom=0.14, left=0.04, right=0.98)
+    figure.text(0.025, 0.025, subtitle, fontsize=8, wrap=True)
+    output = BytesIO()
+    figure.savefig(output, format="png", dpi=150)
+    output.seek(0)
+    return output, subtitle

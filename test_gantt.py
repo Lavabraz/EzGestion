@@ -157,6 +157,7 @@ class GanttTests(unittest.TestCase):
             self.assertTrue(image.getvalue().startswith(b"\x89PNG"))
             self.assertGreater(len(image.getvalue()), 1000)
             self.assertTrue(description)
+            self.assertIn("Durée estimée indiquée à côté de chaque tâche", description)
             image.close()
 
     def test_renders_chronological_timeline(self):
@@ -173,7 +174,8 @@ class GanttTests(unittest.TestCase):
         self.assertTrue(image.getvalue().startswith(b"\x89PNG"))
         self.assertGreaterEqual(struct.unpack(">I", image.getvalue()[16:20])[0], 2600)
         self.assertIn("Frise chronologique", description)
-        self.assertIn("triées par début prévisionnel", description)
+        self.assertIn("positionnées sur la flèche", description)
+        self.assertIn("durée indiquée sur chaque tâche", description)
         image.close()
 
 
