@@ -331,14 +331,14 @@ def _make_timeline(
         available = ", ".join(item["sprint"] for item in sprint_rows) or "aucun sprint"
         raise ValueError(f"Sprint {sprint!r} introuvable dans SprintManagement. Sprints disponibles : {available}.")
     selected_milestones = []
+    selected_ids = None
     if selected_sprint:
         selected_ids = {
             str(item["task_id"]).strip().removesuffix(".0")
             for item in sprint_task_rows
             if item["sprint"].casefold() == sprint.casefold()
         }
-        tasks = [task for task in tasks if task.task_id in selected_ids]
-        if not tasks:
+        if not any(task.task_id in selected_ids for task in tasks):
             raise ValueError(f"Aucune tâche WBS correspondante au sprint {sprint!r}.")
         from gantt import parse_sheet_date
         sprint_start = parse_sheet_date(selected_sprint["start"])
@@ -374,6 +374,7 @@ def _make_timeline(
         activity_rows,
         person,
         selected_milestones,
+        selected_ids,
     )
 
 
@@ -428,6 +429,41 @@ async def gantt(
         content=description[:1900],
         file=discord.File(image, filename="gantt.png"),
     )
+
+
+@frise.autocomplete("sprint")
+async def autocomplete_frise_sprint(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    if str(interaction.channel_id) != CHANNEL_ID or _writer is None:
+        return []
+    try:
+        sprints, _, _ = await asyncio.to_thread(_writer.read_sprint_management_data)
+    except Exception:
+        log.exception("Impossible de charger les sprints depuis SprintManagement")
+        return []
+    query = current.strip().casefold()
+    return [
+        app_commands.Choice(name=item["sprint"][:100], value=item["sprint"][:100])
+        for item in sprints
+        if not query or query in item["sprint"].casefold()
+    ][:25]
+
+
+@frise.autocomplete("personne")
+async def autocomplete_frise_personne(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    if str(interaction.channel_id) != CHANNEL_ID or _writer is None:
+        return []
+    query = current.strip().casefold()
+    return [
+        app_commands.Choice(name=member["display"][:100], value=member["display"])
+        for member in _get_writer().members.values()
+        if not query or query in member["display"].casefold()
+    ][:25]
 
 
 @client.tree.command(
