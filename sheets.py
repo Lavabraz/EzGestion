@@ -7,6 +7,7 @@ from pathlib import Path
 import gspread
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
+from gantt import aggregate_actuals, plan_tasks
 
 log = logging.getLogger(__name__)
 SCOPES = [
@@ -256,6 +257,234 @@ class GoogleSheetWriter:
                         milestone_rows.append({"sprint": sprint_name, "name": name, "date": day})
                 break
         return sprint_rows, task_rows, milestone_rows
+
+    def write_timeline_sheet(
+        self,
+        tasks,
+        period_start,
+        period_end,
+        calendar,
+        hours_per_person_per_day: float,
+        mode: str,
+        activity_rows,
+        person: str | None = None,
+        milestones=None,
+        selected_task_ids=None,
+    ) -> tuple[str, str]:
+        """Écrit la frise chronologique dans un onglet Google Sheets dédié."""
+        from datetime import timedelta
+
+        sheet_name = os.getenv("GOOGLE_TIMELINE_WORKSHEET_NAME", "Frise").strip()
+        try:
+            ws = self.spreadsheet.worksheet(sheet_name)
+        except gspread.WorksheetNotFound:
+            ws = self.spreadsheet.add_worksheet(
+                title=sheet_name, rows=500, cols=380
+            )
+
+        if mode not in {"prevu", "reel"}:
+            raise ValueError("Le mode doit être « prevu » ou « reel ».")
+        if (period_end - period_start).days > 365:
+            raise ValueError("La période demandée ne peut pas dépasser 366 jours.")
+
+        task_by_id = {task.task_id: task for task in tasks}
+        rows = []
+        warnings = []
+        if mode == "prevu":
+            planned = plan_tasks(
+                tasks, period_start, period_end, calendar, hours_per_person_per_day
+            )
+            for item in planned:
+                task = item.task
+                if selected_task_ids is not None and task.task_id not in selected_task_ids:
+                    continue
+                if person and not any(
+                    name.casefold() == person.casefold() for name in task.assignees
+                ):
+                    continue
+                start = task.start_deadline or item.start
+                finish = task.finish_deadline or item.finish
+                if finish < start:
+                    raise ValueError(
+                        f"Tâche WBS {task.task_id} : la date de fin précède la date de début."
+                    )
+                if finish < period_start or start > period_end:
+                    continue
+                start, finish = max(start, period_start), min(finish, period_end)
+                duration = calendar.workday_distance(start, finish) + int(calendar.is_workday(finish))
+                rows.append({
+                    "task": task, "start": start, "finish": finish,
+                    "hours": task.effort_hours, "duration": duration,
+                    "critical": item.critical, "days": {},
+                })
+            rows.sort(key=lambda row: (row["start"], row["finish"], row["task"].task_id))
+            if not rows:
+                raise ValueError("Aucune tâche planifiée dans cette période avec ces filtres.")
+        else:
+            actuals, warnings = aggregate_actuals(
+                tasks, activity_rows or [], period_start, period_end, person
+            )
+            for task_id, days in actuals.items():
+                if selected_task_ids is not None and task_id not in selected_task_ids:
+                    continue
+                if not days:
+                    continue
+                task = task_by_id[task_id]
+                actual_days = sorted(days)
+                rows.append({
+                    "task": task, "start": actual_days[0], "finish": actual_days[-1],
+                    "hours": sum(days.values()), "duration": len(actual_days),
+                    "critical": False, "days": days,
+                })
+            rows.sort(key=lambda row: (row["start"], row["finish"], row["task"].task_id))
+            if not rows:
+                raise ValueError("Aucune activité réelle enregistrée dans cette période avec ces filtres.")
+
+        days = []
+        day = period_start
+        while day <= period_end:
+            days.append(day)
+            day += timedelta(days=1)
+
+        # Colonnes A:H contiennent les informations de tâche; la chronologie commence en I.
+        values = []
+        title_scope = f" — {person}" if person else ""
+        mode_title = "prévisionnelle" if mode == "prevu" else "réelle"
+        title = f"Frise {mode_title}{title_scope} — {period_start:%d/%m/%Y} au {period_end:%d/%m/%Y}"
+        values.append([title])
+        values.append([
+            f"Sprint : {next((name for name, _ in (milestones or [])), 'non filtré') if milestones else 'non filtré'}",
+            f"Mode : {mode_title}",
+            f"Tâches : {len(rows)}",
+            "Rouge : chemin critique" if mode == "prevu" else "Vert : jours avec activité",
+            "Orange : jalons",
+        ])
+        header = ["ID WBS", "Tâche", "Lot", "Personnes", "Estimation (h)", "Début", "Fin", "Durée (j ouvrés)"]
+        header.extend(day.strftime("%a %d/%m") for day in days)
+        values.append(header)
+
+        milestone_rows = []
+        for name, milestone_day in (milestones or []):
+            if milestone_day is None or not (period_start <= milestone_day <= period_end):
+                continue
+            row = ["", f"◆ {name}", "JALON", "", "", milestone_day.isoformat(), "", ""]
+            row.extend("◆" if day == milestone_day else "" for day in days)
+            milestone_rows.append((name, milestone_day, row))
+        values.extend(item[2] for item in milestone_rows)
+        task_start_row = len(values) + 1
+        for item in rows:
+            task = item["task"]
+            row = [
+                task.task_id, task.name, task.lot,
+                ", ".join(task.assignees), item["hours"],
+                item["start"].isoformat(), item["finish"].isoformat(),
+                item["duration"],
+            ]
+            for day in days:
+                if mode == "prevu":
+                    row.append("■" if item["start"] <= day <= item["finish"] else "")
+                else:
+                    row.append(item["days"].get(day, ""))
+            values.append(row)
+
+        # Élargir la feuille si l'horizon dépasse sa taille actuelle.
+        needed_rows, needed_cols = len(values), len(header)
+        if ws.row_count < needed_rows or ws.col_count < needed_cols:
+            ws.resize(rows=max(ws.row_count, needed_rows), cols=max(ws.col_count, needed_cols))
+        ws.clear()
+        ws.update(range_name=f"A1", values=values, value_input_option="USER_ENTERED")
+
+        def col_name(number):
+            result = ""
+            while number:
+                number, rem = divmod(number - 1, 26)
+                result = chr(65 + rem) + result
+            return result
+
+        last_col = col_name(needed_cols)
+        formats = [
+            {"range": f"A1:{last_col}1", "format": {
+                "backgroundColor": {"red": 0.12, "green": 0.18, "blue": 0.29},
+                "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}, "fontSize": 14},
+                "verticalAlignment": "MIDDLE",
+            }},
+            {"range": f"A2:{last_col}2", "format": {
+                "backgroundColor": {"red": 0.91, "green": 0.94, "blue": 0.97},
+                "textFormat": {"fontSize": 9, "foregroundColor": {"red": 0.2, "green": 0.25, "blue": 0.32}},
+            }},
+            {"range": f"A3:{last_col}3", "format": {
+                "backgroundColor": {"red": 0.18, "green": 0.31, "blue": 0.48},
+                "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}},
+                "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE", "wrapStrategy": "WRAP",
+            }},
+            {"range": f"A4:{last_col}{needed_rows}", "format": {
+                "verticalAlignment": "MIDDLE", "textFormat": {"fontSize": 9},
+            }},
+            {"range": f"F4:G{needed_rows}", "format": {"numberFormat": {"type": "DATE", "pattern": "dd/mm/yyyy"}}},
+            {"range": f"A1:{last_col}{needed_rows}", "format": {"borders": {
+                "bottom": {"style": "SOLID", "color": {"red": 0.85, "green": 0.88, "blue": 0.91}},
+            }}},
+        ]
+        for index, (_, milestone_day, _) in enumerate(milestone_rows, start=4):
+            formats.append({"range": f"A{index}:{last_col}{index}", "format": {
+                "backgroundColor": {"red": 1, "green": 0.96, "blue": 0.88},
+                "textFormat": {"bold": True, "foregroundColor": {"red": 0.55, "green": 0.24, "blue": 0.04}},
+            }})
+        for index, item in enumerate(rows, start=task_start_row):
+            if mode == "prevu":
+                color = {"red": 0.82, "green": 0.25, "blue": 0.31} if item["critical"] else {"red": 0.22, "green": 0.49, "blue": 0.75}
+                formats.append({"range": f"I{index}:{last_col}{index}", "format": {
+                    "horizontalAlignment": "CENTER", "textFormat": {"bold": True, "foregroundColor": color},
+                }})
+                formats.append({"range": f"I{index}:{last_col}{index}", "format": {"backgroundColor": {"red": 0.95, "green": 0.96, "blue": 0.97}}})
+                start_col = 9 + (item["start"] - period_start).days
+                end_col = 9 + (item["finish"] - period_start).days
+                formats.append({"range": f"{col_name(start_col)}{index}:{col_name(end_col)}{index}", "format": {
+                    "backgroundColor": color,
+                    "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}},
+                    "horizontalAlignment": "CENTER",
+                }})
+            else:
+                formats.append({"range": f"I{index}:{last_col}{index}", "format": {
+                    "horizontalAlignment": "CENTER",
+                    "backgroundColor": {"red": 0.96, "green": 0.97, "blue": 0.96},
+                }})
+                for day, hours in item["days"].items():
+                    col = col_name(9 + (day - period_start).days)
+                    formats.append({"range": f"{col}{index}", "format": {
+                        "backgroundColor": {"red": 0.08, "green": 0.62, "blue": 0.42},
+                        "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}},
+                        "horizontalAlignment": "CENTER",
+                    }})
+        for index, (_, milestone_day, _) in enumerate(milestone_rows, start=4):
+            col = col_name(9 + (milestone_day - period_start).days)
+            formats.append({"range": f"{col}{index}", "format": {
+                "backgroundColor": {"red": 0.97, "green": 0.58, "blue": 0.04},
+                "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}},
+                "horizontalAlignment": "CENTER",
+            }})
+
+        ws.batch_format(formats)
+        ws.freeze(rows=3, cols=2)
+        ws.set_basic_filter(f"A3:{last_col}{needed_rows}")
+        ws.format("A:A", {"columnWidth": 80})
+        ws.format("B:B", {"columnWidth": 300, "wrapStrategy": "WRAP"})
+        ws.format("C:D", {"columnWidth": 130, "wrapStrategy": "WRAP"})
+        ws.format("E:H", {"columnWidth": 105})
+        ws.format(f"I:{last_col}", {"columnWidth": 42, "horizontalAlignment": "CENTER"})
+        ws.format(f"A1:{last_col}{needed_rows}", {"verticalAlignment": "MIDDLE"})
+        ws.format(f"A4:H{needed_rows}", {"wrapStrategy": "WRAP"})
+        ws.update_title(sheet_name)
+        summary = f"{len(rows)} tâche(s) affichée(s) dans l'onglet « {sheet_name} »."
+        if mode == "reel" and warnings:
+            summary += " Activités non attribuées : " + "; ".join(warnings[:5])
+            if len(warnings) > 5:
+                summary += f" (+{len(warnings) - 5})"
+        if milestone_rows:
+            summary += " Jalons : " + ", ".join(
+                f"{name} ({day:%d/%m/%Y})" for name, day, _ in milestone_rows
+            ) + "."
+        return ws.url, summary
 
     def _wbs_task_at(self, row: int) -> str:
         if row < self.wbs_start_row:
