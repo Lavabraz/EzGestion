@@ -946,7 +946,7 @@ def render_timeline(
         # Preserve the full task name and wrap it onto multiple lines when needed.
         name_lines = wrap(f"{task.task_id} — {task.name}", width=30, break_long_words=True) or [task.name]
         detail = f"{total_hours:g} h · {duration_days} j ouvrés" if mode == "prevu" else f"{total_hours:g} h réelles"
-        labels.append("\\n".join(name_lines + [detail]))
+        labels.append("\n".join(name_lines + [detail]))
     axis.set_yticklabels(labels, fontsize=8)
     axis.invert_yaxis()
     axis.xaxis_date()
@@ -1045,7 +1045,6 @@ def render_timeline(
     for tick in axis.get_yticklabels():
         tick.set_linespacing(1.15)
     figure.subplots_adjust(left=0.39, right=0.98, top=0.88, bottom=0.12)
-    figure.text(0.02, 0.025, subtitle, fontsize=8, wrap=True)
     output = BytesIO()
     figure.savefig(output, format="png", dpi=160, bbox_inches="tight")
     output.seek(0)
