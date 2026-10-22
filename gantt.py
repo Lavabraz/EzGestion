@@ -449,9 +449,10 @@ def plan_tasks(
 
 def aggregate_actuals(
     tasks: list[WbsTask],
-    activity_rows: list[tuple[str, str, str]],
+    activity_rows: list[tuple],
     period_start: date,
     period_end: date,
+    person: str | None = None,
 ) -> tuple[dict[str, dict[date, float]], list[str]]:
     name_to_tasks: dict[str, list[WbsTask]] = defaultdict(list)
     id_to_task = {task.task_id: task for task in tasks}
@@ -460,7 +461,11 @@ def aggregate_actuals(
 
     totals: dict[str, dict[date, float]] = defaultdict(lambda: defaultdict(float))
     unmatched: dict[str, float] = defaultdict(float)
-    for raw_day, raw_hours, raw_name in activity_rows:
+    for activity in activity_rows:
+        raw_day, raw_hours, raw_name = activity[:3]
+        activity_person = str(activity[3]).strip() if len(activity) > 3 else ""
+        if person and activity_person.casefold() != person.casefold():
+            continue
         task_name = str(raw_name).strip()
         if not task_name:
             continue
@@ -508,7 +513,8 @@ def infer_period_bounds(
         source = "les dates « Commencer avant » et « Finir avant » du WBS"
     else:
         activity_dates = []
-        for row_day, row_hours, _ in activity_rows:
+        for activity in activity_rows:
+            row_day, row_hours = activity[:2]
             if row_day in (None, "") or row_hours in (None, ""):
                 continue
             activity_day = parse_sheet_date(row_day)
@@ -843,7 +849,10 @@ def render_timeline(
     calendar: WorkCalendar,
     hours_per_person_per_day: float = 7.0,
     mode: str = "prevu",
-    activity_rows: list[tuple[str, str, str]] | None = None,
+    activity_rows: list[tuple] | None = None,
+    person: str | None = None,
+    milestones: list[tuple[str, date]] | None = None,
+    selected_task_ids: set[str] | None = None,
 ) -> tuple[BytesIO, str]:
     if not tasks:
         raise ValueError("Aucune tâche avec ID et intitulé n'a été trouvée dans le WBS.")
@@ -872,15 +881,24 @@ def render_timeline(
             for item in planned
             if item.start <= period_end and item.finish >= period_start
         ]
+        if selected_task_ids is not None:
+            timeline_items = [item for item in timeline_items if item[0].task_id in selected_task_ids]
+        if person:
+            timeline_items = [
+                item for item in timeline_items
+                if any(name.casefold() == person.casefold() for name in item[0].assignees)
+            ]
         timeline_items.sort(key=lambda item: (item[1], item[2], item[0].task_id))
         if not timeline_items:
             raise ValueError("Aucune tâche planifiée dans cette période.")
     else:
         actuals, unmatched = aggregate_actuals(
-            tasks, activity_rows or [], period_start, period_end
+            tasks, activity_rows or [], period_start, period_end, person
         )
         task_by_id = {task.task_id: task for task in tasks}
         for task_id, days in actuals.items():
+            if selected_task_ids is not None and task_id not in selected_task_ids:
+                continue
             actual_days = sorted(days)
             if not actual_days:
                 continue
@@ -950,14 +968,18 @@ def render_timeline(
         datetime.combine(period_start - timedelta(days=1), datetime.min.time()),
         datetime.combine(period_end + timedelta(days=2), datetime.min.time()),
     )
-    axis.set_ylim(-lane_count - 0.8, lane_count + 0.8)
+    axis.set_ylim(
+        -lane_count - 0.8,
+        lane_count + (2.0 if milestones else 0.8),
+    )
     axis.set_yticks([])
     axis.xaxis_date()
     date_format = "%d/%m/%Y" if period_start.year != period_end.year else "%d/%m"
     axis.xaxis.set_major_formatter(DateFormatter(date_format))
     axis.grid(axis="x", linestyle=":", alpha=0.35)
     axis.set_xlabel("Date")
-    axis.set_title(f"Frise chronologique — {period_start:%d/%m/%Y} au {period_end:%d/%m/%Y}")
+    title_scope = f" — {person}" if person else ""
+    axis.set_title(f"Frise chronologique{title_scope} — {period_start:%d/%m/%Y} au {period_end:%d/%m/%Y}")
 
     start_x = datetime.combine(period_start, datetime.min.time())
     end_x = datetime.combine(period_end + timedelta(days=1), datetime.min.time())
@@ -1059,6 +1081,18 @@ def render_timeline(
             zorder=3,
         )
 
+    visible_milestones = [
+        (name, day) for name, day in (milestones or [])
+        if period_start <= day <= period_end
+    ]
+    for name, day in visible_milestones:
+        x = datetime.combine(day, datetime.min.time()) + timedelta(hours=12)
+        axis.axvline(x, color="#b54708", linestyle="--", linewidth=1.2, alpha=0.8)
+        axis.text(
+            x, lane_count + 0.45, shorten(f"◆ {name}", width=28, placeholder="..."),
+            rotation=35, ha="left", va="bottom", fontsize=8, color="#b54708",
+        )
+
     if mode == "prevu":
         axis.legend(handles=[
             Patch(color=colors["critical"], label="Chemin critique"),
@@ -1096,6 +1130,12 @@ def render_timeline(
                 transform=axis.transAxes,
                 color="#667085",
             )
+    if person:
+        subtitle = f"Membre : {person}. " + subtitle
+    if visible_milestones:
+        subtitle += " Jalons : " + ", ".join(
+            f"{name} ({day:%d/%m/%Y})" for name, day in visible_milestones
+        ) + "."
     figure.subplots_adjust(top=0.84, bottom=0.14, left=0.04, right=0.98)
     figure.text(0.025, 0.025, subtitle, fontsize=8, wrap=True)
     output = BytesIO()

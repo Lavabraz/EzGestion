@@ -205,6 +205,23 @@ class GanttTests(unittest.TestCase):
         self.assertIn("durée ouvrée indiqués sur chaque tâche", description)
         image.close()
 
+    def test_actual_hours_can_be_filtered_by_member(self):
+        tasks = parse_wbs_tasks([
+            [1, "", "", "Analyse", 7, 0, 7, "Lucas", "", "", 0],
+        ])
+        totals, warnings = aggregate_actuals(
+            tasks,
+            [
+                ("2026-10-20", 1.5, "Analyse", "Lucas"),
+                ("2026-10-21", 2, "Analyse", "Nathan"),
+            ],
+            date(2026, 10, 1),
+            date(2026, 10, 31),
+            person="Lucas",
+        )
+        self.assertEqual(totals["1"], {date(2026, 10, 20): 1.5})
+        self.assertEqual(warnings, [])
+
     def test_renders_actual_timeline_without_valid_planning_data(self):
         tasks = parse_wbs_tasks(
             [[1, "missing-id", "", "Analyse", "invalid", 0, "invalid", "", "", "", "n/a"]],
