@@ -1,8 +1,11 @@
 import asyncio
+from dataclasses import replace
 import logging
+import math
 import os
 import threading
 from datetime import date, datetime, time
+from io import BytesIO
 from zoneinfo import ZoneInfo
 
 import discord
@@ -10,7 +13,15 @@ from discord import app_commands
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
-from gantt import WorkCalendar, configured_vacations, french_public_holidays
+from gantt import (
+    WorkCalendar,
+    configured_vacations,
+    french_public_holidays,
+    infer_period_bounds,
+    parse_gantt_data,
+    render_gantt,
+    render_timeline,
+)
 from parser import parse_activity
 from recurring_activities import activities_for_date
 from sheets import GoogleSheetWriter
@@ -34,7 +45,6 @@ if not CHANNEL_ID.isdigit():
 
 _writer: GoogleSheetWriter | None = None
 _writer_lock = threading.Lock()
-_participation_synced = False
 
 
 def _get_writer() -> GoogleSheetWriter:
@@ -175,7 +185,7 @@ client = ActivityBot(command_prefix="!", intents=intents)
 async def on_ready():
     global _participation_synced
     log.info("Connecté à Discord en tant que %s (ID %s)", client.user, client.user.id)
-    log.info("Commande /activite disponible dans le salon Discord ID %s", CHANNEL_ID)
+    log.info("Commandes /activite et /frise disponibles dans le salon Discord ID %s", CHANNEL_ID)
     if not _participation_synced:
         try:
             count = await asyncio.to_thread(
@@ -269,6 +279,200 @@ async def autocomplete_tache(
         app_commands.Choice(name=f"{row} — {task_name}"[:100], value=str(row))
         for row, task_name in _writer.get_wbs_task_choices(current)
     ]
+
+
+def _parse_gantt_date(value: str, field_name: str) -> date:
+    try:
+        return datetime.strptime(value.strip(), "%d/%m/%Y").date()
+    except ValueError as error:
+        raise ValueError(
+            f"La date « {field_name} » doit être au format JJ/MM/AAAA."
+        ) from error
+
+
+
+def _make_timeline(
+    start: date | None,
+    end: date | None,
+    mode: str,
+    sprint: str | None = None,
+    person: str | None = None,
+) -> tuple[str, str]:
+    sheet_writer = _get_writer()
+    wbs_rows, activity_rows = sheet_writer.read_gantt_data()
+    sprint_rows, sprint_task_rows, milestone_rows = sheet_writer.read_sprint_management_data()
+    tasks, activity_rows = parse_gantt_data(
+        wbs_rows,
+        activity_rows,
+        sheet_writer.wbs_start_row,
+        tolerate_planning_errors=mode == "reel",
+    )
+    selected_sprint = next(
+        (item for item in sprint_rows if item["sprint"].casefold() == sprint.casefold()),
+        None,
+    ) if sprint else None
+    if sprint and selected_sprint is None:
+        available = ", ".join(item["sprint"] for item in sprint_rows) or "aucun sprint"
+        raise ValueError(f"Sprint {sprint!r} introuvable dans SprintManagement. Sprints disponibles : {available}.")
+    selected_milestones = []
+    selected_ids = None
+    if selected_sprint:
+        selected_ids = {
+            str(item["task_id"]).strip().removesuffix(".0")
+            for item in sprint_task_rows
+            if item["sprint"].casefold() == sprint.casefold()
+        }
+        if not any(task.task_id in selected_ids for task in tasks):
+            raise ValueError(f"Aucune tâche WBS correspondante au sprint {sprint!r}.")
+        sprint_assignments = {
+            str(item["task_id"]).strip().removesuffix(".0"): tuple(
+                name.strip() for name in str(item.get("assignees", "")).split(",")
+                if name.strip()
+            )
+            for item in sprint_task_rows
+            if item["sprint"].casefold() == sprint.casefold()
+        }
+        tasks = [
+            replace(task, assignees=sprint_assignments[task.task_id])
+            if task.task_id in sprint_assignments and sprint_assignments[task.task_id]
+            else task
+            for task in tasks
+        ]
+        from gantt import parse_sheet_date
+        sprint_start = parse_sheet_date(selected_sprint["start"])
+        sprint_end = parse_sheet_date(selected_sprint["end"])
+        if start is None:
+            start = sprint_start
+        if end is None:
+            end = sprint_end
+        selected_milestones = [
+            (item["name"], parse_sheet_date(item["date"]))
+            for item in milestone_rows
+            if item["sprint"].casefold() == sprint.casefold()
+            and parse_sheet_date(item["date"]) is not None
+        ]
+    start, end = infer_period_bounds(mode, tasks, activity_rows, start, end)
+    if (end - start).days > 365:
+        raise ValueError("La période demandée ne peut pas dépasser 366 jours.")
+    years = range(start.year, end.year + 1)
+    holidays = set().union(*(french_public_holidays(year) for year in years))
+    calendar = WorkCalendar(holidays, configured_vacations())
+    hours_per_person_per_day = float(
+        os.getenv("GANTT_HOURS_PER_PERSON_PER_DAY", "7")
+    )
+    if not math.isfinite(hours_per_person_per_day) or hours_per_person_per_day <= 0:
+        raise ValueError("GANTT_HOURS_PER_PERSON_PER_DAY doit être supérieur à zéro.")
+    return sheet_writer.write_timeline_sheet(
+        tasks,
+        start,
+        end,
+        calendar,
+        hours_per_person_per_day,
+        mode,
+        activity_rows,
+        person,
+        selected_milestones,
+        selected_ids,
+        sprint,
+    )
+
+
+
+@client.tree.command(
+    name="frise",
+    description="Générer une frise chronologique prévue ou réelle",
+)
+@app_commands.describe(
+    mode="Frise prévisionnelle ou basée sur les heures réellement saisies",
+    sprint="Sprint à afficher depuis SprintManagement",
+    personne="Filtrer la frise sur un membre de l'équipe",
+    debut="Début au format JJ/MM/AAAA (sinon déduit du sprint ou des données)",
+    fin="Fin au format JJ/MM/AAAA (sinon déduit du sprint ou des données)",
+)
+@app_commands.choices(mode=[
+    app_commands.Choice(name="Prévu", value="prevu"),
+    app_commands.Choice(name="Réel", value="reel"),
+])
+async def frise(
+    interaction: discord.Interaction,
+    mode: str = "prevu",
+    sprint: str | None = None,
+    personne: str | None = None,
+    debut: str | None = None,
+    fin: str | None = None,
+):
+    if str(interaction.channel_id) != CHANNEL_ID:
+        await interaction.response.send_message(
+            "Cette commande est disponible uniquement dans le salon configuré."
+        )
+        return
+
+    try:
+        period_start = _parse_gantt_date(debut, "début") if debut else None
+        period_end = _parse_gantt_date(fin, "fin") if fin else None
+        if period_start and period_end:
+            if period_end < period_start:
+                raise ValueError(
+                    "La date de fin doit être égale ou postérieure à la date de début."
+                )
+            if (period_end - period_start).days > 365:
+                raise ValueError("La période demandée ne peut pas dépasser 366 jours.")
+    except ValueError as error:
+        await interaction.response.send_message(f"Paramètres invalides : {error}")
+        return
+
+    await interaction.response.defer(thinking=True)
+    try:
+        image, description = await asyncio.to_thread(
+            _make_timeline, period_start, period_end, mode, sprint, personne
+        )
+    except Exception as error:
+        log.exception(
+            "Échec de génération de la frise, interaction_id=%s",
+            interaction.id,
+        )
+        await interaction.followup.send(f"Impossible de générer la frise : {error}")
+        return
+
+    await interaction.followup.send(
+        content=f"{description}\n{image}",
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+
+
+@frise.autocomplete("sprint")
+async def autocomplete_frise_sprint(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    if str(interaction.channel_id) != CHANNEL_ID or _writer is None:
+        return []
+    try:
+        sprints, _, _ = await asyncio.to_thread(_writer.read_sprint_management_data)
+    except Exception:
+        log.exception("Impossible de charger les sprints depuis SprintManagement")
+        return []
+    query = current.strip().casefold()
+    return [
+        app_commands.Choice(name=item["sprint"][:100], value=item["sprint"][:100])
+        for item in sprints
+        if not query or query in item["sprint"].casefold()
+    ][:25]
+
+
+@frise.autocomplete("personne")
+async def autocomplete_frise_personne(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    if str(interaction.channel_id) != CHANNEL_ID or _writer is None:
+        return []
+    query = current.strip().casefold()
+    return [
+        app_commands.Choice(name=member["display"][:100], value=member["display"])
+        for member in _get_writer().members.values()
+        if not query or query in member["display"].casefold()
+    ][:25]
 
 
 client.run(DISCORD_TOKEN)
