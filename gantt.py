@@ -513,7 +513,8 @@ def infer_period_bounds(
         source = "les dates « Commencer avant » et « Finir avant » du WBS"
     else:
         activity_dates = []
-        for row_day, row_hours, _ in activity_rows:
+        for activity in activity_rows:
+            row_day, row_hours = activity[:2]
             if row_day in (None, "") or row_hours in (None, ""):
                 continue
             activity_day = parse_sheet_date(row_day)
@@ -864,6 +865,7 @@ def render_timeline(
     activity_rows: list[tuple] | None = None,
     person: str | None = None,
     milestones: list[tuple[str, date]] | None = None,
+    selected_task_ids: set[str] | None = None,
 ) -> tuple[BytesIO, str]:
     if not tasks:
         raise ValueError("Aucune tâche avec ID et intitulé n'a été trouvée dans le WBS.")
@@ -892,6 +894,8 @@ def render_timeline(
             for item in planned
             if item.start <= period_end and item.finish >= period_start
         ]
+        if selected_task_ids is not None:
+            timeline_items = [item for item in timeline_items if item[0].task_id in selected_task_ids]
         if person:
             timeline_items = [
                 item for item in timeline_items
@@ -906,6 +910,8 @@ def render_timeline(
         )
         task_by_id = {task.task_id: task for task in tasks}
         for task_id, days in actuals.items():
+            if selected_task_ids is not None and task_id not in selected_task_ids:
+                continue
             actual_days = sorted(days)
             if not actual_days:
                 continue
