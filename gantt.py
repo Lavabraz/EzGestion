@@ -76,12 +76,31 @@ def parse_sheet_date(value) -> date | None:
         return date(1899, 12, 30) + timedelta(days=int(value))
 
     text = str(value).strip()
-    for date_format in ("%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%m/%d/%Y"):
+    # Google Sheets peut renvoyer une date formatée avec l'heure, notamment
+    # lorsqu'une cellule de jalon contient une date/heure plutôt qu'une date seule.
+    for date_format in (
+        "%d/%m/%Y %H:%M:%S",
+        "%d/%m/%Y %H:%M",
+        "%d-%m-%Y %H:%M:%S",
+        "%d-%m-%Y %H:%M",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S.%f",
+        "%d/%m/%Y",
+        "%d-%m-%Y",
+        "%Y-%m-%d",
+        "%m/%d/%Y",
+    ):
         try:
             return datetime.strptime(text, date_format).date()
         except ValueError:
             continue
-    raise ValueError(f"Date Google Sheets invalide : {value!r}.")
+    raise ValueError(
+        f"Date Google Sheets invalide : {value!r}. "
+        "Vérifiez la cellule source : formats attendus JJ/MM/AAAA ou "
+        "JJ/MM/AAAA HH:MM:SS (ex. 23/10/2026 12:00:00)."
+    )
 
 
 def parse_wbs_tasks(
