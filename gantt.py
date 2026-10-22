@@ -884,22 +884,29 @@ def render_timeline(
         planned = plan_tasks(
             tasks, period_start, period_end, calendar, hours_per_person_per_day
         )
-        timeline_items = [
-            (
-                item.task,
-                item.start,
-                item.finish,
-                item.task.effort_hours,
-                calendar.workday_distance(item.start, item.finish)
-                + int(calendar.is_workday(item.finish))
-                if item.task.effort_hours > 0
-                else 0,
-                item.critical,
-                {},
-            )
-            for item in planned
-            if item.start <= period_end and item.finish >= period_start
-        ]
+        planned_by_id = {item.task.task_id: item for item in planned}
+        timeline_items = []
+        for item in planned:
+            task = item.task
+            # Pour la frise prévisionnelle, les dates du WBS sont la source de vérité.
+            # Le planning calculé reste un repli pour les tâches sans dates WBS complètes.
+            task_start = task.start_deadline or item.start
+            task_finish = task.finish_deadline or item.finish
+            if task.start_deadline and task.finish_deadline and task.finish_deadline < task.start_deadline:
+                raise ValueError(
+                    f"Tâche WBS {task.task_id} : la date de fin précède la date de début."
+                )
+            if task_start <= period_end and task_finish >= period_start:
+                duration = (
+                    calendar.workday_distance(task_start, task_finish)
+                    + int(calendar.is_workday(task_finish))
+                    if task.effort_hours > 0
+                    else 0
+                )
+                timeline_items.append((
+                    task, task_start, task_finish, task.effort_hours,
+                    duration, item.critical, {},
+                ))
         if selected_task_ids is not None:
             timeline_items = [item for item in timeline_items if item[0].task_id in selected_task_ids]
         if person:
@@ -941,8 +948,12 @@ def render_timeline(
             placeholder="...",
         )
         if mode == "prevu":
+            date_range = (
+                f"{start:%d/%m}" if start == finish
+                else f"{start:%d/%m}–{finish:%d/%m}"
+            )
             labels.append(
-                f"{task_name} · {total_hours:g} h · {duration_days} j ouvrés"
+                f"{task_name} · {date_range} · {total_hours:g} h · {duration_days} j ouvrés"
             )
         else:
             date_range = (
@@ -1043,6 +1054,18 @@ def render_timeline(
             markeredgewidth=1.2,
             zorder=4,
         )
+        if task_finish > task_start:
+            axis.plot(
+                [
+                    datetime.combine(task_start, datetime.min.time()) + timedelta(hours=12),
+                    datetime.combine(task_finish, datetime.min.time()) + timedelta(hours=12),
+                ],
+                [0, 0],
+                color=color,
+                linewidth=4 if mode == "prevu" else 3,
+                alpha=0.75,
+                zorder=3,
+            )
         if mode == "reel":
             for actual_day in days:
                 actual_x = (
@@ -1058,18 +1081,6 @@ def render_timeline(
                     markeredgecolor="white",
                     markeredgewidth=0.7,
                     zorder=5,
-                )
-            if task_finish > task_start:
-                axis.plot(
-                    [
-                        datetime.combine(task_start, datetime.min.time()) + timedelta(hours=12),
-                        datetime.combine(task_finish, datetime.min.time()) + timedelta(hours=12),
-                    ],
-                    [0, 0],
-                    color=color,
-                    linewidth=3,
-                    alpha=0.7,
-                    zorder=3,
                 )
         axis.plot(
             [marker_x, marker_x],
