@@ -45,6 +45,7 @@ if not CHANNEL_ID.isdigit():
 
 _writer: GoogleSheetWriter | None = None
 _writer_lock = threading.Lock()
+_participation_synced = False
 
 
 def _get_writer() -> GoogleSheetWriter:
