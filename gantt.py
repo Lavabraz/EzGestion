@@ -576,12 +576,16 @@ def _render_gantt(
     unmatched: list[str] = []
     if mode == "reel":
         actuals, unmatched = aggregate_actuals(
-            tasks, activity_rows, period_start, period_end
+            tasks, activity_rows or [], period_start, period_end, person
         )
         display_tasks = [
             task for task in tasks
-            if actuals.get(task.task_id) or task.task_id in path_ids
+            if actuals.get(task.task_id) or (task.task_id in path_ids and not person)
         ]
+        if selected_task_ids is not None:
+            display_tasks = [
+                task for task in display_tasks if task.task_id in selected_task_ids
+            ]
     else:
         display_tasks = [
             item.task for item in planned
