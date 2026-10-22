@@ -2,6 +2,12 @@
 
 Bot Python qui écoute **un seul salon Discord** et enregistre les activités saisies avec la commande slash `/activite`. La tâche est choisie dans les suggestions provenant de l'onglet WBS, puis les heures sont cumulées sur la ligne exacte sélectionnée.
 
+## Participation dans le WBS
+
+La colonne dont l'en-tête est `Participation` dans la feuille `WBS` est alimentée automatiquement à partir des activités de la feuille `Heures`. À chaque utilisation de `/activite`, le nom du membre est ajouté à la tâche WBS sans doublon. Au démarrage du bot, la colonne est reconstruite à partir de l'historique déjà présent dans les blocs individuels de `Heures`.
+
+Pour l'historique, les noms de tâches doivent être uniques dans le WBS : si plusieurs lignes portent le même nom, le bot ignore cette tâche lors de la reconstruction et le signale dans les logs, car la feuille `Heures` ne contient pas l'identifiant de ligne WBS.
+
 ## Enregistrer une activité
 
 Dans le salon Discord configuré, lancez `/activite` et renseignez :
