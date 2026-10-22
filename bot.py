@@ -311,15 +311,48 @@ def _make_timeline(
     start: date | None,
     end: date | None,
     mode: str,
+    sprint: str | None = None,
+    person: str | None = None,
 ) -> tuple[BytesIO, str]:
     sheet_writer = _get_writer()
     wbs_rows, activity_rows = sheet_writer.read_gantt_data()
+    sprint_rows, sprint_task_rows, milestone_rows = sheet_writer.read_sprint_management_data()
     tasks, activity_rows = parse_gantt_data(
         wbs_rows,
         activity_rows,
         sheet_writer.wbs_start_row,
         tolerate_planning_errors=mode == "reel",
     )
+    selected_sprint = next(
+        (item for item in sprint_rows if item["sprint"].casefold() == sprint.casefold()),
+        None,
+    ) if sprint else None
+    if sprint and selected_sprint is None:
+        available = ", ".join(item["sprint"] for item in sprint_rows) or "aucun sprint"
+        raise ValueError(f"Sprint {sprint!r} introuvable dans SprintManagement. Sprints disponibles : {available}.")
+    selected_milestones = []
+    if selected_sprint:
+        selected_ids = {
+            str(item["task_id"]).strip().removesuffix(".0")
+            for item in sprint_task_rows
+            if item["sprint"].casefold() == sprint.casefold()
+        }
+        tasks = [task for task in tasks if task.task_id in selected_ids]
+        if not tasks:
+            raise ValueError(f"Aucune tâche WBS correspondante au sprint {sprint!r}.")
+        from gantt import parse_sheet_date
+        sprint_start = parse_sheet_date(selected_sprint["start"])
+        sprint_end = parse_sheet_date(selected_sprint["end"])
+        if start is None:
+            start = sprint_start
+        if end is None:
+            end = sprint_end
+        selected_milestones = [
+            (item["name"], parse_sheet_date(item["date"]))
+            for item in milestone_rows
+            if item["sprint"].casefold() == sprint.casefold()
+            and parse_sheet_date(item["date"]) is not None
+        ]
     start, end = infer_period_bounds(mode, tasks, activity_rows, start, end)
     if (end - start).days > 365:
         raise ValueError("La période demandée ne peut pas dépasser 366 jours.")
@@ -339,6 +372,8 @@ def _make_timeline(
         hours_per_person_per_day,
         mode,
         activity_rows,
+        person,
+        selected_milestones,
     )
 
 
@@ -401,8 +436,10 @@ async def gantt(
 )
 @app_commands.describe(
     mode="Frise prévisionnelle ou basée sur les heures réellement saisies",
-    debut="Début au format JJ/MM/AAAA (par défaut : première date disponible)",
-    fin="Fin au format JJ/MM/AAAA (par défaut : dernière date disponible)",
+    sprint="Sprint à afficher depuis SprintManagement",
+    personne="Filtrer la frise sur un membre de l'équipe",
+    debut="Début au format JJ/MM/AAAA (sinon déduit du sprint ou des données)",
+    fin="Fin au format JJ/MM/AAAA (sinon déduit du sprint ou des données)",
 )
 @app_commands.choices(mode=[
     app_commands.Choice(name="Prévu", value="prevu"),
@@ -411,6 +448,8 @@ async def gantt(
 async def frise(
     interaction: discord.Interaction,
     mode: str = "prevu",
+    sprint: str | None = None,
+    personne: str | None = None,
     debut: str | None = None,
     fin: str | None = None,
 ):
@@ -437,7 +476,7 @@ async def frise(
     await interaction.response.defer(thinking=True)
     try:
         image, description = await asyncio.to_thread(
-            _make_timeline, period_start, period_end, mode
+            _make_timeline, period_start, period_end, mode, sprint, personne
         )
     except Exception as error:
         log.exception(
