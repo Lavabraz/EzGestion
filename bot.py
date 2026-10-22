@@ -314,7 +314,7 @@ def _make_timeline(
     mode: str,
     sprint: str | None = None,
     person: str | None = None,
-) -> tuple[BytesIO, str]:
+) -> tuple[str, str]:
     sheet_writer = _get_writer()
     wbs_rows, activity_rows = sheet_writer.read_gantt_data()
     sprint_rows, sprint_task_rows, milestone_rows = sheet_writer.read_sprint_management_data()
@@ -379,7 +379,7 @@ def _make_timeline(
     )
     if not math.isfinite(hours_per_person_per_day) or hours_per_person_per_day <= 0:
         raise ValueError("GANTT_HOURS_PER_PERSON_PER_DAY doit être supérieur à zéro.")
-    return render_timeline(
+    return sheet_writer.write_timeline_sheet(
         tasks,
         start,
         end,
@@ -503,8 +503,8 @@ async def frise(
         return
 
     await interaction.followup.send(
-        content=description[:1900],
-        file=discord.File(image, filename="frise.png"),
+        content=f"{description}\n{image}",
+        allowed_mentions=discord.AllowedMentions.none(),
     )
 
 
