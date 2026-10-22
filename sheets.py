@@ -1,6 +1,7 @@
 """Écrit les activités dans les blocs prévus pour chaque membre du Google Sheet."""
 import logging
 import os
+import unicodedata
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -131,6 +132,111 @@ class GoogleSheetWriter:
                 continue
         return None
 
+    @staticmethod
+    def _normalize_header(value) -> str:
+        text = unicodedata.normalize("NFKD", str(value or ""))
+        return "".join(char for char in text if not unicodedata.combining(char)).strip().casefold()
+
+    @staticmethod
+    def _column_letter(number: int) -> str:
+        result = ""
+        while number:
+            number, remainder = divmod(number - 1, 26)
+            result = chr(65 + remainder) + result
+        return result
+
+    def _participation_column(self) -> str:
+        header_row = max(1, self.wbs_start_row - 1)
+        headers = self.wbs_worksheet.row_values(header_row)
+        for index, header in enumerate(headers, start=1):
+            if self._normalize_header(header) == "participation":
+                return self._column_letter(index)
+        raise ValueError(
+            f"Colonne 'Participation' introuvable dans l'en-tête de la feuille "
+            f"{self.wbs_worksheet_name!r} (ligne {header_row})."
+        )
+
+    def _add_wbs_participant(self, wbs_row: int, member_name: str) -> None:
+        column = self._participation_column()
+        cell = self.wbs_worksheet.acell(f"{column}{wbs_row}")
+        existing = str(cell.value or "").strip()
+        participants = [name.strip() for name in existing.split(",") if name.strip()]
+        known = {name.casefold() for name in participants}
+        if member_name.strip().casefold() not in known:
+            participants.append(member_name.strip())
+            self.wbs_worksheet.update(
+                range_name=f"{column}{wbs_row}",
+                values=[[", ".join(participants)]],
+                value_input_option="RAW",
+            )
+
+    def rebuild_wbs_participation_from_hours(self) -> int:
+        """Reconstruit la colonne Participation à partir des blocs individuels de Heures.
+
+        Les tâches WBS portant le même nom ne peuvent pas être distinguées dans
+        l'historique de Heures : elles sont ignorées pour éviter d'attribuer une
+        participation à la mauvaise ligne.
+        """
+        participation_column = self._participation_column()
+        task_values = self.wbs_worksheet.col_values(4)
+        first_row = self.wbs_start_row
+        task_rows = {}
+        last_task_row = first_row - 1
+        for offset, value in enumerate(task_values[first_row - 1:]):
+            task_name = str(value or "").strip()
+            if not task_name:
+                continue
+            row_number = first_row + offset
+            last_task_row = max(last_task_row, row_number)
+            task_rows.setdefault(task_name.casefold(), []).append(row_number)
+
+        participants_by_row = {row: [] for rows in task_rows.values() for row in rows}
+        for member in self.members.values():
+            date_col, duration_col, task_col = member["date"], member["duration"], member["task"]
+            records = self.worksheet.get(
+                f"{date_col}{self.start_row}:{task_col}",
+                value_render_option="UNFORMATTED_VALUE",
+            )
+            for record in records:
+                if len(record) < 3:
+                    continue
+                task_name = str(record[2] or "").strip()
+                if not task_name:
+                    continue
+                matching_rows = task_rows.get(task_name.casefold(), [])
+                if len(matching_rows) != 1:
+                    if len(matching_rows) > 1:
+                        log.warning(
+                            "Participation historique ignorée : la tâche %r existe "
+                            "sur plusieurs lignes WBS (%s).",
+                            task_name, matching_rows,
+                        )
+                    continue
+                row_number = matching_rows[0]
+                names = participants_by_row[row_number]
+                if member["display"].casefold() not in {name.casefold() for name in names}:
+                    names.append(member["display"])
+
+        if last_task_row < first_row:
+            log.info("Aucune tâche WBS trouvée pour reconstruire la participation.")
+            return 0
+
+        values = [
+            [", ".join(participants_by_row.get(row, []))]
+            for row in range(first_row, last_task_row + 1)
+        ]
+        self.wbs_worksheet.update(
+            range_name=f"{participation_column}{first_row}:{participation_column}{last_task_row}",
+            values=values,
+            value_input_option="RAW",
+        )
+        updated_count = sum(bool(value[0]) for value in values)
+        log.info(
+            "Participation WBS reconstruite depuis Heures : %d tâche(s) avec participation.",
+            updated_count,
+        )
+        return updated_count
+
     def write_recurring_activity(self, record, wbs_row: int) -> bool:
         author = str(record.get("member", "")).strip().casefold()
         member = self.members.get(author)
@@ -176,6 +282,7 @@ class GoogleSheetWriter:
             value_input_option="USER_ENTERED",
         )
         self._add_wbs_hours(wbs_row, record["duration_hours"])
+        self._add_wbs_participant(wbs_row, member["display"])
         log.info(
             "Activité récurrente de %s écrite pour %s le %s",
             member["display"],
@@ -567,6 +674,7 @@ class GoogleSheetWriter:
             value_input_option="USER_ENTERED",
         )
         self._add_wbs_hours(wbs_row, record["duration_hours"])
+        self._add_wbs_participant(wbs_row, member["display"])
         log.info(
             "Activité de %s écrite pour %r dans %s%d:%s%d",
             member["display"], task_name, date_col, row, task_col, row,
