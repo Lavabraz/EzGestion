@@ -270,6 +270,7 @@ class GoogleSheetWriter:
         person: str | None = None,
         milestones=None,
         selected_task_ids=None,
+        sprint_label: str | None = None,
     ) -> tuple[str, str]:
         """Écrit la frise chronologique dans un onglet Google Sheets dédié."""
         from datetime import timedelta
@@ -353,7 +354,7 @@ class GoogleSheetWriter:
         title = f"Frise {mode_title}{title_scope} — {period_start:%d/%m/%Y} au {period_end:%d/%m/%Y}"
         values.append([title])
         values.append([
-            f"Sprint : {next((name for name, _ in (milestones or [])), 'non filtré') if milestones else 'non filtré'}",
+            f"Sprint : {sprint_label or 'non filtré'}",
             f"Mode : {mode_title}",
             f"Tâches : {len(rows)}",
             "Rouge : chemin critique" if mode == "prevu" else "Vert : jours avec activité",
@@ -474,7 +475,6 @@ class GoogleSheetWriter:
         ws.format(f"I:{last_col}", {"columnWidth": 42, "horizontalAlignment": "CENTER"})
         ws.format(f"A1:{last_col}{needed_rows}", {"verticalAlignment": "MIDDLE"})
         ws.format(f"A4:H{needed_rows}", {"wrapStrategy": "WRAP"})
-        ws.update_title(sheet_name)
         summary = f"{len(rows)} tâche(s) affichée(s) dans l'onglet « {sheet_name} »."
         if mode == "reel" and warnings:
             summary += " Activités non attribuées : " + "; ".join(warnings[:5])
