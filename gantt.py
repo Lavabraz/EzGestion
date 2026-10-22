@@ -981,7 +981,10 @@ def render_timeline(
         datetime.combine(period_start - timedelta(days=1), datetime.min.time()),
         datetime.combine(period_end + timedelta(days=2), datetime.min.time()),
     )
-    axis.set_ylim(-lane_count - 0.8, lane_count + 0.8)
+    axis.set_ylim(
+        -lane_count - 0.8,
+        lane_count + (2.0 if milestones else 0.8),
+    )
     axis.set_yticks([])
     axis.xaxis_date()
     date_format = "%d/%m/%Y" if period_start.year != period_end.year else "%d/%m"
