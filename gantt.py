@@ -890,8 +890,12 @@ def render_timeline(
             task = item.task
             # Pour la frise prévisionnelle, les dates du WBS sont la source de vérité.
             # Le planning calculé reste un repli pour les tâches sans dates WBS complètes.
-            task_start = task.start_deadline or item.start
-            task_finish = task.finish_deadline or item.finish
+            if task.start_deadline and task.finish_deadline:
+                task_start = task.start_deadline
+                task_finish = task.finish_deadline
+            else:
+                task_start = item.start
+                task_finish = item.finish
             if task.start_deadline and task.finish_deadline and task.finish_deadline < task.start_deadline:
                 raise ValueError(
                     f"Tâche WBS {task.task_id} : la date de fin précède la date de début."
