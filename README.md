@@ -149,3 +149,16 @@ Dans l'onglet individuel, le bot écrit uniquement dans les trois cellules du bl
 La commande propose les tâches de la colonne D de l'onglet `WBS` à partir de la ligne 2. Après sélection, la durée est ajoutée au total de la colonne K sur cette même ligne. La valeur déjà présente en K doit être numérique ou vide.
 
 Les paramètres facultatifs sont `GOOGLE_WBS_WORKSHEET_NAME` (défaut : `WBS`) et `GOOGLE_WBS_DATA_START_ROW` (défaut : `2`). Vérifiez la structure et faites un essai sur une copie du tableur avant la mise en production.
+
+
+## Générer une frise chronologique avec Discord
+
+La commande `/frise` génère une frise prévisionnelle ou réelle à partir des données du WBS et de la feuille `Heures`. Elle peut être filtrée par sprint et par personne.
+
+Paramètres disponibles :
+- `mode` : `Prévu` ou `Réel`.
+- `sprint` : sprint provenant de l'onglet `SprintManagement` (facultatif).
+- `personne` : membre à afficher (facultatif).
+- `debut` et `fin` : dates facultatives au format `JJ/MM/AAAA`.
+
+Sans dates, la période est déduite des données ou du sprint sélectionné. La commande doit être utilisée dans le salon Discord configuré. La commande `/gantt` n'est pas conservée.
