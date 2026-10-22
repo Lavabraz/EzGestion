@@ -216,8 +216,9 @@ class GoogleSheetWriter:
             if all(key in headers for key in ("sprint", "début", "fin", "objectif")):
                 for data in rows[index + 1:]:
                     name = str(cell(data, headers.index("sprint")) or "").strip()
-                    if name:
-                        sprint_rows.append({
+                    if not name:
+                        break
+                    sprint_rows.append({
                             "sprint": name,
                             "start": cell(data, headers.index("début")),
                             "end": cell(data, headers.index("fin")),
@@ -231,8 +232,9 @@ class GoogleSheetWriter:
                     sprint_name = str(cell(data, headers.index("sprint")) or "").strip()
                     task_id = str(cell(data, headers.index("id wbs")) or "").strip()
                     task_name = str(cell(data, headers.index("tâche")) or "").strip()
-                    if sprint_name and task_id and task_name:
-                        task_rows.append({
+                    if not sprint_name or not task_id or not task_name:
+                        break
+                    task_rows.append({
                             "sprint": sprint_name,
                             "task_id": task_id.removesuffix(".0"),
                             "status": cell(data, headers.index("statut")) if "statut" in headers else "",
@@ -248,7 +250,9 @@ class GoogleSheetWriter:
                     sprint_name = str(cell(data, headers.index("sprint")) or "").strip()
                     name = str(cell(data, headers.index("jalon")) or "").strip()
                     day = cell(data, headers.index("date de livraison"))
-                    if sprint_name and name and day not in ("", None):
+                    if not sprint_name:
+                        break
+                    if name and day not in ("", None):
                         milestone_rows.append({"sprint": sprint_name, "name": name, "date": day})
                 break
         return sprint_rows, task_rows, milestone_rows
