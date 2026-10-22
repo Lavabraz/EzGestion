@@ -390,6 +390,7 @@ def _make_timeline(
         person,
         selected_milestones,
         selected_ids,
+        sprint,
     )
 
 
