@@ -7,7 +7,7 @@ import math
 import os
 import re
 from functools import lru_cache
-from textwrap import shorten
+from textwrap import shorten, wrap
 from typing import Iterable
 
 import matplotlib
