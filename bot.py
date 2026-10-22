@@ -431,41 +431,6 @@ async def gantt(
     )
 
 
-@frise.autocomplete("sprint")
-async def autocomplete_frise_sprint(
-    interaction: discord.Interaction,
-    current: str,
-) -> list[app_commands.Choice[str]]:
-    if str(interaction.channel_id) != CHANNEL_ID or _writer is None:
-        return []
-    try:
-        sprints, _, _ = await asyncio.to_thread(_writer.read_sprint_management_data)
-    except Exception:
-        log.exception("Impossible de charger les sprints depuis SprintManagement")
-        return []
-    query = current.strip().casefold()
-    return [
-        app_commands.Choice(name=item["sprint"][:100], value=item["sprint"][:100])
-        for item in sprints
-        if not query or query in item["sprint"].casefold()
-    ][:25]
-
-
-@frise.autocomplete("personne")
-async def autocomplete_frise_personne(
-    interaction: discord.Interaction,
-    current: str,
-) -> list[app_commands.Choice[str]]:
-    if str(interaction.channel_id) != CHANNEL_ID or _writer is None:
-        return []
-    query = current.strip().casefold()
-    return [
-        app_commands.Choice(name=member["display"][:100], value=member["display"])
-        for member in _get_writer().members.values()
-        if not query or query in member["display"].casefold()
-    ][:25]
-
-
 @client.tree.command(
     name="frise",
     description="Générer une frise chronologique prévue ou réelle",
@@ -526,6 +491,41 @@ async def frise(
         content=description[:1900],
         file=discord.File(image, filename="frise.png"),
     )
+
+
+@frise.autocomplete("sprint")
+async def autocomplete_frise_sprint(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    if str(interaction.channel_id) != CHANNEL_ID or _writer is None:
+        return []
+    try:
+        sprints, _, _ = await asyncio.to_thread(_writer.read_sprint_management_data)
+    except Exception:
+        log.exception("Impossible de charger les sprints depuis SprintManagement")
+        return []
+    query = current.strip().casefold()
+    return [
+        app_commands.Choice(name=item["sprint"][:100], value=item["sprint"][:100])
+        for item in sprints
+        if not query or query in item["sprint"].casefold()
+    ][:25]
+
+
+@frise.autocomplete("personne")
+async def autocomplete_frise_personne(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    if str(interaction.channel_id) != CHANNEL_ID or _writer is None:
+        return []
+    query = current.strip().casefold()
+    return [
+        app_commands.Choice(name=member["display"][:100], value=member["display"])
+        for member in _get_writer().members.values()
+        if not query or query in member["display"].casefold()
+    ][:25]
 
 
 client.run(DISCORD_TOKEN)
