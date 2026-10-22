@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 import logging
 import math
 import os
@@ -340,6 +341,20 @@ def _make_timeline(
         }
         if not any(task.task_id in selected_ids for task in tasks):
             raise ValueError(f"Aucune tâche WBS correspondante au sprint {sprint!r}.")
+        sprint_assignments = {
+            str(item["task_id"]).strip().removesuffix(".0"): tuple(
+                name.strip() for name in str(item.get("assignees", "")).split(",")
+                if name.strip()
+            )
+            for item in sprint_task_rows
+            if item["sprint"].casefold() == sprint.casefold()
+        }
+        tasks = [
+            replace(task, assignees=sprint_assignments[task.task_id])
+            if task.task_id in sprint_assignments and sprint_assignments[task.task_id]
+            else task
+            for task in tasks
+        ]
         from gantt import parse_sheet_date
         sprint_start = parse_sheet_date(selected_sprint["start"])
         sprint_end = parse_sheet_date(selected_sprint["end"])
