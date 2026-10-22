@@ -932,8 +932,8 @@ def render_timeline(
             raise ValueError("Aucune activité réelle enregistrée dans cette période.")
 
     count = len(rows)
-    fig_height = max(4.5, 1.05 + count * 0.58)
-    figure = Figure(figsize=(16, fig_height), constrained_layout=False)
+    fig_height = max(4.8, 1.25 + count * 0.78 + min(len(milestones or []), 8) * 0.18)
+    figure = Figure(figsize=(18, fig_height), constrained_layout=False)
     FigureCanvasAgg(figure)
     axis = figure.add_subplot(1, 1, 1)
     left = datetime.combine(period_start, datetime.min.time())
@@ -943,11 +943,10 @@ def render_timeline(
     axis.set_yticks(list(range(count)))
     labels = []
     for task, start_day, finish_day, total_hours, duration_days, _, _ in rows:
-        name = shorten(f"{task.task_id} — {task.name}", width=42, placeholder="...")
-        if mode == "prevu":
-            labels.append(f"{name}   ({total_hours:g} h · {duration_days} j ouvrés)")
-        else:
-            labels.append(f"{name}   ({total_hours:g} h réelles)")
+        # Preserve the full task name and wrap it onto multiple lines when needed.
+        name_lines = wrap(f"{task.task_id} — {task.name}", width=30, break_long_words=True) or [task.name]
+        detail = f"{total_hours:g} h · {duration_days} j ouvrés" if mode == "prevu" else f"{total_hours:g} h réelles"
+        labels.append("\\n".join(name_lines + [detail]))
     axis.set_yticklabels(labels, fontsize=8)
     axis.invert_yaxis()
     axis.xaxis_date()
@@ -994,12 +993,25 @@ def render_timeline(
 
     visible_milestones = [(name, day) for name, day in (milestones or [])
                           if period_start <= day <= period_end]
-    for name, day in visible_milestones:
-        x = datetime.combine(day, datetime.min.time()) + timedelta(hours=12)
-        axis.axvline(x, color="#b54708", linestyle="--", linewidth=1.1, alpha=0.85, zorder=2)
-        axis.text(x, 1.005, shorten(f"◆ {name}", width=24, placeholder="..."),
-                  transform=axis.get_xaxis_transform(), rotation=0, ha="left", va="bottom",
-                  fontsize=7, color="#b54708", clip_on=True)
+    if visible_milestones:
+        # Add a dedicated band above the task lanes for highly visible milestone labels.
+        axis.set_ylim(count - 0.3, -1.35 - min(0.5, len(visible_milestones) * 0.05))
+        for index, (name, day) in enumerate(visible_milestones):
+            x = datetime.combine(day, datetime.min.time()) + timedelta(hours=12)
+            axis.axvline(x, color="#b54708", linestyle="--", linewidth=1.6, alpha=0.9, zorder=2)
+            y_header = -0.78 - (index % 2) * 0.38
+            axis.scatter([x], [y_header], marker="D", s=68, color="#f79009",
+                         edgecolors="#7a2e0e", linewidths=1.0, zorder=6, clip_on=False)
+            axis.annotate(
+                f"{name}\\n{day:%d/%m/%Y}",
+                xy=(x, y_header), xytext=(8, 8 if index % 2 == 0 else -25),
+                textcoords="offset points", ha="left",
+                va="bottom" if index % 2 == 0 else "top",
+                fontsize=8, fontweight="bold", color="#7a2e0e",
+                bbox={"boxstyle": "round,pad=0.4", "facecolor": "#fff4e5",
+                      "edgecolor": "#f79009", "linewidth": 1.2},
+                zorder=7, clip_on=False,
+            )
 
     if mode == "prevu":
         legend = [
@@ -1021,7 +1033,7 @@ def render_timeline(
             subtitle += ". Activités non attribuées : " + "; ".join(unmatched[:5])
             if len(unmatched) > 5:
                 subtitle += f" (+{len(unmatched) - 5})"
-    axis.legend(handles=legend, loc="upper right", frameon=False, ncol=2, fontsize=8)
+    # Bottom legend removed to leave more room for the timeline.
     if visible_milestones:
         subtitle += " Jalons : " + ", ".join(
             f"{name} ({day:%d/%m/%Y})" for name, day in visible_milestones
@@ -1029,8 +1041,10 @@ def render_timeline(
     axis.spines["top"].set_visible(False)
     axis.spines["right"].set_visible(False)
     axis.spines["left"].set_visible(False)
-    axis.tick_params(axis="y", length=0, pad=8)
-    figure.subplots_adjust(left=0.30, right=0.98, top=0.90, bottom=0.13)
+    axis.tick_params(axis="y", length=0, pad=10)
+    for tick in axis.get_yticklabels():
+        tick.set_linespacing(1.15)
+    figure.subplots_adjust(left=0.39, right=0.98, top=0.88, bottom=0.12)
     figure.text(0.02, 0.025, subtitle, fontsize=8, wrap=True)
     output = BytesIO()
     figure.savefig(output, format="png", dpi=160, bbox_inches="tight")
