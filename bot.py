@@ -34,6 +34,7 @@ if not CHANNEL_ID.isdigit():
 
 _writer: GoogleSheetWriter | None = None
 _writer_lock = threading.Lock()
+_participation_synced = False
 
 
 def _get_writer() -> GoogleSheetWriter:
@@ -172,8 +173,20 @@ client = ActivityBot(command_prefix="!", intents=intents)
 
 @client.event
 async def on_ready():
+    global _participation_synced
     log.info("Connecté à Discord en tant que %s (ID %s)", client.user, client.user.id)
     log.info("Commande /activite disponible dans le salon Discord ID %s", CHANNEL_ID)
+    if not _participation_synced:
+        try:
+            count = await asyncio.to_thread(
+                _get_writer().rebuild_wbs_participation_from_hours
+            )
+            _participation_synced = True
+            log.info("Synchronisation historique de la participation terminée (%d tâches).", count)
+        except Exception:
+            log.exception(
+                "Impossible de reconstruire la participation WBS depuis la feuille Heures"
+            )
 
 
 @client.tree.command(name="activite", description="Enregistrer du temps sur une tâche WBS")
