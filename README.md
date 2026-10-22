@@ -149,7 +149,7 @@ La connexion à Google Sheets est initialisée en arrière-plan après le démar
 
 ## Configuration adaptée au tableau « Heures individuelles »
 
-Le bot est configuré par défaut pour l'onglet `Copie de HeuresIndividuelles` et les blocs visibles sur la capture :
+Le bot est configuré par défaut pour l'onglet `Heures` et les blocs individuels ci-dessous :
 
 - Thomas : date en B, heures en C, description en D.
 - Lucas : date en F, heures en G, description en H.
