@@ -2,6 +2,12 @@
 
 Bot Python qui écoute **un seul salon Discord** et enregistre les activités saisies avec la commande slash `/activite`. La tâche est choisie dans les suggestions provenant de l'onglet WBS, puis les heures sont cumulées sur la ligne exacte sélectionnée.
 
+## Participation dans le WBS
+
+La colonne dont l'en-tête est `Participation` dans la feuille `WBS` est alimentée automatiquement à partir des activités de la feuille `Heures`. À chaque utilisation de `/activite`, le nom du membre est ajouté à la tâche WBS sans doublon. Au démarrage du bot, la colonne est reconstruite à partir de l'historique déjà présent dans les blocs individuels de `Heures`.
+
+Pour l'historique, les noms de tâches doivent être uniques dans le WBS : si plusieurs lignes portent le même nom, le bot ignore cette tâche lors de la reconstruction et le signale dans les logs, car la feuille `Heures` ne contient pas l'identifiant de ligne WBS.
+
 ## Enregistrer une activité
 
 Dans le salon Discord configuré, lancez `/activite` et renseignez :
@@ -22,30 +28,6 @@ Chaque jour à 23 h 55 (heure de Paris), le bot ajoute les activités récurrent
 - 5 min de « Réunion Daily » les jours ouvrés, sauf le lundi.
 
 Les réunions du lundi sont enregistrées même si ce lundi est férié ou pendant des vacances. Les daily sont exclues les lundis, week-ends, jours fériés français et périodes définies par `GANTT_VACATION_RANGES`. Les dates manquées lorsque le bot est arrêté ne sont pas rattrapées. Chaque activité est écrite dans le bloc individuel du membre et ses heures sont ajoutées à la colonne K de la tâche WBS correspondante. Un message de confirmation est envoyé dans le salon pour chaque activité effectivement ajoutée. Les quatre tâches doivent donc déjà exister dans le WBS sous les noms « Réunion Hebdo », « Réunion Client », « Réunion Gp » et « Réunion Daily ».
-
-## Générer un Gantt
-
-Dans le salon configuré, utilisez `/gantt` avec le mode `Prévu` ou `Réel`. Les dates sont facultatives :
-
-- `debut` : facultatif, au format `JJ/MM/AAAA`.
-- `fin` : facultative, au format `JJ/MM/AAAA`.
-- Vous pouvez préciser les deux dates, une seule, ou aucune. En mode prévu, une borne omise est déduite des dates minimales/maximales du WBS (« Commencer avant » / « Finir avant »). En mode réel, elle est déduite du premier/dernier enregistrement d'heures.
-- Si aucune donnée ne permet de calculer une borne omise, le bot demande de la fournir. La période maximale est de 366 jours.
-
-La commande `/frise` propose les modes `Prévu` et `Réel`, ainsi que les options facultatives `sprint` et `personne`. Le sprint est sélectionné depuis `SprintManagement` ; ses dates bornent la frise par défaut, ses tâches sont filtrées par ID WBS et ses jalons sont affichés sur la chronologie. Le filtre `personne` limite les tâches prévisionnelles aux tâches affectées à ce membre et, en mode réel, aux heures enregistrées dans son bloc de l'onglet `Heures`. Les antécédents restent chargés depuis l'ensemble du WBS pour ne pas casser le calcul des dépendances entre sprints. La frise prévisionnelle positionne les tâches WBS sur une flèche selon leur début prévu, avec l'effort estimé et le nombre de jours ouvrés. La frise réelle place les repères selon les jours où des heures ont été saisies; chaque tâche indique son total réel et sa période d'activité. Les paramètres facultatifs `debut` et `fin` sont déduits des dates du WBS en mode prévu, ou des enregistrements d'heures en mode réel.
-
-Le mode prévu lit l'ID (A), les dépendances (B, un ou plusieurs ID séparés par des virgules), l'intitulé (D), l'estimation avec marge (G), les personnes affectées (H) et les dates limites de début/fin (I/J). Il génère un calendrier au plus tard, en jours ouvrés, et n'affiche que les tâches dont le calendrier chevauche la période demandée. Le chemin critique mis en évidence est le plus long chemin du graphe de dépendances, calculé à partir des durées estimées; les dates I/J placent les tâches, mais ne changent pas ce calcul.
-
-Le Gantt affiche la durée estimée à côté de chaque tâche, trie les lignes par début prévisionnel et utilise des flèches coudées pour rendre les dépendances plus lisibles. La commande `/frise` met à jour un onglet Google Sheets dédié (nom configurable avec `GOOGLE_TIMELINE_WORKSHEET_NAME`, défaut `Frise`) et renvoie son lien dans Discord. Elle conserve les modes `Prévu` et `Réel`, les filtres sprint/personne, les dates facultatives, le chemin critique prévisionnel en rouge, les autres tâches prévues en bleu, les activités réelles en vert et les jalons en orange. La chronologie utilise une colonne par jour; les libellés complets restent lisibles dans les colonnes de tâches. Le Gantt `/gantt` continue d'être envoyé sous forme d'image.
-
-Le mode réel représente les heures datées de l'onglet individuel dans la période choisie et affiche les tâches ayant une activité réelle à cette période. Les activités sont associées à une tâche par son intitulé exact; si plusieurs tâches ont le même intitulé, les heures correspondantes sont signalées comme non attribuées. Dans ce mode, le chemin critique affiché est celui du planning prévisionnel, pas un chemin critique recalculé à partir des heures historiques. Si les données prévisionnelles sont invalides, les heures réelles restent affichées et le chemin critique est signalé comme indisponible.
-
-Le calendrier exclut les week-ends, les jours fériés nationaux de France métropolitaine et, par défaut, les vacances du 26/10/2026 au 01/11/2026 inclus. Les paramètres facultatifs sont :
-
-- `GANTT_HOURS_PER_PERSON_PER_DAY` : capacité journalière par personne (défaut : `7`).
-- `GANTT_VACATION_RANGES` : périodes de congés inclusives au format `AAAA-MM-JJ:AAAA-MM-JJ`, séparées par des virgules.
-
-La durée estimée est convertie en jours ouvrés avec `Estimation avec marge / (capacité par personne × nombre de personnes affectées)`, arrondie au jour supérieur. Une estimation vide ou nulle est affichée comme jalon. Le calcul ne nivelle pas les conflits lorsqu'une personne est affectée à plusieurs tâches en même temps; le diagramme le signale. En mode prévu, les références de dépendance invalides, les cycles et les erreurs de données entraînent un message d'erreur plutôt qu'un planning trompeur.
 
 ## Pré-requis
 
@@ -104,7 +86,7 @@ pip install -r requirements.txt
 python bot.py
 ```
 
-Dans le salon surveillé, utilisez `/activite`, choisissez une durée et sélectionnez une tâche dans la liste proposée. Vérifiez que la ligne apparaît dans le bon bloc membre et que le total de la même tâche augmente dans WBS. Testez aussi `/gantt` en modes prévu et réel. Au démarrage, les commandes slash sont synchronisées dans le serveur du salon configuré.
+Dans le salon surveillé, utilisez `/activite`, choisissez une durée et sélectionnez une tâche dans la liste proposée. Vérifiez que la ligne apparaît dans le bon bloc membre et que le total de la même tâche augmente dans WBS. Au démarrage, les commandes slash sont synchronisées dans le serveur du salon configuré.
 
 ## 5. Déployer en continu avec Docker
 
@@ -167,3 +149,16 @@ Dans l'onglet individuel, le bot écrit uniquement dans les trois cellules du bl
 La commande propose les tâches de la colonne D de l'onglet `WBS` à partir de la ligne 2. Après sélection, la durée est ajoutée au total de la colonne K sur cette même ligne. La valeur déjà présente en K doit être numérique ou vide.
 
 Les paramètres facultatifs sont `GOOGLE_WBS_WORKSHEET_NAME` (défaut : `WBS`) et `GOOGLE_WBS_DATA_START_ROW` (défaut : `2`). Vérifiez la structure et faites un essai sur une copie du tableur avant la mise en production.
+
+
+## Générer une frise chronologique avec Discord
+
+La commande `/frise` génère une frise prévisionnelle ou réelle à partir des données du WBS et de la feuille `Heures`. Elle peut être filtrée par sprint et par personne.
+
+Paramètres disponibles :
+- `mode` : `Prévu` ou `Réel`.
+- `sprint` : sprint provenant de l'onglet `SprintManagement` (facultatif).
+- `personne` : membre à afficher (facultatif).
+- `debut` et `fin` : dates facultatives au format `JJ/MM/AAAA`.
+
+Sans dates, la période est déduite des données ou du sprint sélectionné. La commande doit être utilisée dans le salon Discord configuré. La commande `/gantt` n'est pas conservée.

@@ -45,6 +45,7 @@ if not CHANNEL_ID.isdigit():
 
 _writer: GoogleSheetWriter | None = None
 _writer_lock = threading.Lock()
+_participation_synced = False
 
 
 def _get_writer() -> GoogleSheetWriter:
@@ -183,8 +184,20 @@ client = ActivityBot(command_prefix="!", intents=intents)
 
 @client.event
 async def on_ready():
+    global _participation_synced
     log.info("Connecté à Discord en tant que %s (ID %s)", client.user, client.user.id)
-    log.info("Commande /activite disponible dans le salon Discord ID %s", CHANNEL_ID)
+    log.info("Commandes /activite et /frise disponibles dans le salon Discord ID %s", CHANNEL_ID)
+    if not _participation_synced:
+        try:
+            count = await asyncio.to_thread(
+                _get_writer().rebuild_wbs_participation_from_hours
+            )
+            _participation_synced = True
+            log.info("Synchronisation historique de la participation terminée (%d tâches).", count)
+        except Exception:
+            log.exception(
+                "Impossible de reconstruire la participation WBS depuis la feuille Heures"
+            )
 
 
 @client.tree.command(name="activite", description="Enregistrer du temps sur une tâche WBS")
@@ -278,35 +291,6 @@ def _parse_gantt_date(value: str, field_name: str) -> date:
         ) from error
 
 
-def _make_gantt(
-    start: date | None,
-    end: date | None,
-    mode: str,
-) -> tuple[BytesIO, str]:
-    sheet_writer = _get_writer()
-    wbs_rows, activity_rows = sheet_writer.read_gantt_data()
-    tasks, activity_rows = parse_gantt_data(
-        wbs_rows,
-        activity_rows,
-        sheet_writer.wbs_start_row,
-        tolerate_planning_errors=mode == "reel",
-    )
-    start, end = infer_period_bounds(mode, tasks, activity_rows, start, end)
-    if (end - start).days > 365:
-        raise ValueError("La période demandée ne peut pas dépasser 366 jours.")
-    years = range(start.year, end.year + 1)
-    holidays = set().union(*(french_public_holidays(year) for year in years))
-    calendar = WorkCalendar(holidays, configured_vacations())
-    return render_gantt(
-        tasks,
-        activity_rows,
-        start,
-        end,
-        mode,
-        calendar,
-        float(os.getenv("GANTT_HOURS_PER_PERSON_PER_DAY", "7")),
-    )
-
 
 def _make_timeline(
     start: date | None,
@@ -393,58 +377,6 @@ def _make_timeline(
         sprint,
     )
 
-
-@client.tree.command(name="gantt", description="Générer un Gantt WBS sur une période")
-@app_commands.describe(
-    mode="Heures prévues ou heures réellement enregistrées",
-    debut="Début au format JJ/MM/AAAA (par défaut : première date du WBS ou des activités)",
-    fin="Fin au format JJ/MM/AAAA (par défaut : dernière date du WBS ou des activités)",
-)
-@app_commands.choices(mode=[
-    app_commands.Choice(name="Prévu", value="prevu"),
-    app_commands.Choice(name="Réel", value="reel"),
-])
-async def gantt(
-    interaction: discord.Interaction,
-    mode: str,
-    debut: str | None = None,
-    fin: str | None = None,
-):
-    if str(interaction.channel_id) != CHANNEL_ID:
-        await interaction.response.send_message(
-            "Cette commande est disponible uniquement dans le salon configuré."
-        )
-        return
-
-    try:
-        period_start = _parse_gantt_date(debut, "début") if debut else None
-        period_end = _parse_gantt_date(fin, "fin") if fin else None
-        if period_start and period_end:
-            if period_end < period_start:
-                raise ValueError("La date de fin doit être égale ou postérieure à la date de début.")
-            if (period_end - period_start).days > 365:
-                raise ValueError("La période demandée ne peut pas dépasser 366 jours.")
-        hours_per_person_per_day = float(os.getenv("GANTT_HOURS_PER_PERSON_PER_DAY", "7"))
-        if not math.isfinite(hours_per_person_per_day) or hours_per_person_per_day <= 0:
-            raise ValueError("GANTT_HOURS_PER_PERSON_PER_DAY doit être supérieur à zéro.")
-    except ValueError as error:
-        await interaction.response.send_message(f"Paramètres invalides : {error}")
-        return
-
-    await interaction.response.defer(thinking=True)
-    try:
-        image, description = await asyncio.to_thread(
-            _make_gantt, period_start, period_end, mode
-        )
-    except Exception as error:
-        log.exception("Échec de génération du Gantt, interaction_id=%s", interaction.id)
-        await interaction.followup.send(f"Impossible de générer le Gantt : {error}")
-        return
-
-    await interaction.followup.send(
-        content=description[:1900],
-        file=discord.File(image, filename="gantt.png"),
-    )
 
 
 @client.tree.command(
