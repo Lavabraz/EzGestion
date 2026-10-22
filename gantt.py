@@ -810,21 +810,8 @@ def _render_gantt(
             label="Heures enregistrées dans une journée",
         )
 
-    milestone_summary = ""
-    if milestones:
-        visible_milestones = [
-            (name, day) for name, day in milestones if period_start <= day <= period_end
-        ]
-        for name, day in visible_milestones:
-            x = datetime.combine(day, datetime.min.time()) + timedelta(hours=12)
-            axis.axvline(x, color="#b54708", linestyle="--", linewidth=1.2, alpha=0.8)
-            axis.text(x, lane_count + 0.45, shorten(f"◆ {name}", width=28, placeholder="..."),
-                      rotation=35, ha="left", va="bottom", fontsize=8, color="#b54708")
-        milestone_summary = ", ".join(f"{name} ({day:%d/%m/%Y})" for name, day in visible_milestones)
     subtitle = (
-        (f"Membre : {person}. " if person else "")
-        + (f"Jalons : {milestone_summary}. " if milestone_summary else "")
-        + "Durée estimée indiquée à côté de chaque tâche. "
+        "Durée estimée indiquée à côté de chaque tâche. "
         f"Période {period_start:%d/%m/%Y} au {period_end:%d/%m/%Y}. {subtitle}"
     )
     figure.text(0.025, 0.025, subtitle, fontsize=8, wrap=True)
@@ -1094,6 +1081,18 @@ def render_timeline(
             zorder=3,
         )
 
+    visible_milestones = [
+        (name, day) for name, day in (milestones or [])
+        if period_start <= day <= period_end
+    ]
+    for name, day in visible_milestones:
+        x = datetime.combine(day, datetime.min.time()) + timedelta(hours=12)
+        axis.axvline(x, color="#b54708", linestyle="--", linewidth=1.2, alpha=0.8)
+        axis.text(
+            x, lane_count + 0.45, shorten(f"◆ {name}", width=28, placeholder="..."),
+            rotation=35, ha="left", va="bottom", fontsize=8, color="#b54708",
+        )
+
     if mode == "prevu":
         axis.legend(handles=[
             Patch(color=colors["critical"], label="Chemin critique"),
@@ -1131,6 +1130,12 @@ def render_timeline(
                 transform=axis.transAxes,
                 color="#667085",
             )
+    if person:
+        subtitle = f"Membre : {person}. " + subtitle
+    if visible_milestones:
+        subtitle += " Jalons : " + ", ".join(
+            f"{name} ({day:%d/%m/%Y})" for name, day in visible_milestones
+        ) + "."
     figure.subplots_adjust(top=0.84, bottom=0.14, left=0.04, right=0.98)
     figure.text(0.025, 0.025, subtitle, fontsize=8, wrap=True)
     output = BytesIO()
