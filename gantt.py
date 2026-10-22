@@ -873,59 +873,51 @@ def render_timeline(
     milestones: list[tuple[str, date]] | None = None,
     selected_task_ids: set[str] | None = None,
 ) -> tuple[BytesIO, str]:
+    """Render a readable Gantt chart with one horizontal lane per task."""
     if not tasks:
         raise ValueError("Aucune tâche avec ID et intitulé n'a été trouvée dans le WBS.")
     if mode not in {"prevu", "reel"}:
         raise ValueError("Le mode doit être « prevu » ou « reel ».")
 
-    timeline_items = []
     unmatched: list[str] = []
+    planned_by_id = {}
+    actuals = {}
+    task_by_id = {task.task_id: task for task in tasks}
     if mode == "prevu":
         planned = plan_tasks(
             tasks, period_start, period_end, calendar, hours_per_person_per_day
         )
         planned_by_id = {item.task.task_id: item for item in planned}
-        timeline_items = []
+        rows = []
         for item in planned:
             task = item.task
-            # Pour la frise prévisionnelle, les dates du WBS sont la source de vérité.
-            # Le planning calculé reste un repli pour les tâches sans dates WBS complètes.
+            if selected_task_ids is not None and task.task_id not in selected_task_ids:
+                continue
+            if person and not any(name.casefold() == person.casefold() for name in task.assignees):
+                continue
             if task.start_deadline and task.finish_deadline:
-                task_start = task.start_deadline
-                task_finish = task.finish_deadline
+                start_day, finish_day = task.start_deadline, task.finish_deadline
             else:
-                task_start = item.start
-                task_finish = item.finish
-            if task.start_deadline and task.finish_deadline and task.finish_deadline < task.start_deadline:
+                start_day, finish_day = item.start, item.finish
+            if task.start_deadline and task.finish_deadline and finish_day < start_day:
                 raise ValueError(
                     f"Tâche WBS {task.task_id} : la date de fin précède la date de début."
                 )
-            if task_start <= period_end and task_finish >= period_start:
-                duration = (
-                    calendar.workday_distance(task_start, task_finish)
-                    + int(calendar.is_workday(task_finish))
-                    if task.effort_hours > 0
-                    else 0
-                )
-                timeline_items.append((
-                    task, task_start, task_finish, task.effort_hours,
-                    duration, item.critical, {},
-                ))
-        if selected_task_ids is not None:
-            timeline_items = [item for item in timeline_items if item[0].task_id in selected_task_ids]
-        if person:
-            timeline_items = [
-                item for item in timeline_items
-                if any(name.casefold() == person.casefold() for name in item[0].assignees)
-            ]
-        timeline_items.sort(key=lambda item: (item[1], item[2], item[0].task_id))
-        if not timeline_items:
+            if finish_day < period_start or start_day > period_end:
+                continue
+            start_day = max(start_day, period_start)
+            finish_day = min(finish_day, period_end)
+            rows.append((task, start_day, finish_day, task.effort_hours,
+                         calendar.workday_distance(start_day, finish_day) + int(calendar.is_workday(finish_day)),
+                         item.critical, {}))
+        rows.sort(key=lambda item: (item[1], item[2], item[0].task_id))
+        if not rows:
             raise ValueError("Aucune tâche planifiée dans cette période.")
     else:
         actuals, unmatched = aggregate_actuals(
             tasks, activity_rows or [], period_start, period_end, person
         )
-        task_by_id = {task.task_id: task for task in tasks}
+        rows = []
         for task_id, days in actuals.items():
             if selected_task_ids is not None and task_id not in selected_task_ids:
                 continue
@@ -933,246 +925,114 @@ def render_timeline(
             if not actual_days:
                 continue
             task = task_by_id[task_id]
-            timeline_items.append((
-                task,
-                actual_days[0],
-                actual_days[-1],
-                sum(days.values()),
-                len(actual_days),
-                False,
-                days,
-            ))
-        timeline_items.sort(key=lambda item: (item[1], item[2], item[0].task_id))
+            rows.append((task, actual_days[0], actual_days[-1], sum(days.values()),
+                         len(actual_days), False, days))
+        rows.sort(key=lambda item: (item[1], item[2], item[0].task_id))
+        if not rows:
+            raise ValueError("Aucune activité réelle enregistrée dans cette période.")
 
-    labels = []
-    for task, start, finish, total_hours, duration_days, _, _ in timeline_items:
-        task_name = shorten(
-            f"{task.task_id} — {task.name}",
-            width=34,
-            placeholder="...",
-        )
-        if mode == "prevu":
-            date_range = (
-                f"{start:%d/%m}" if start == finish
-                else f"{start:%d/%m}–{finish:%d/%m}"
-            )
-            labels.append(
-                f"{task_name} · {date_range} · {total_hours:g} h · {duration_days} j ouvrés"
-            )
-        else:
-            date_range = (
-                f"{start:%d/%m}" if start == finish
-                else f"{start:%d/%m}–{finish:%d/%m}"
-            )
-            labels.append(
-                f"{task_name} · {total_hours:g} h réelles · {date_range}"
-            )
-    period_days = (period_end - period_start).days + 1
-    figure_width = 18
-    axes_width_inches = figure_width * 0.94
-    label_widths = [
-        min(0.32 * period_days, max(2.0, len(label) * 0.055 * period_days / axes_width_inches))
-        for label in labels
-    ]
-    lane_right_edges: list[list[float]] = [[], []]
-    lane_assignments: list[tuple[int, int]] = []
-    marker_positions = [
-        (item[1] - period_start).days + 0.5
-        for item in timeline_items
-    ]
-    for index, (position, label_width) in enumerate(zip(marker_positions, label_widths)):
-        side = index % 2
-        half_width = label_width / 2
-        lane = 0
-        while lane < len(lane_right_edges[side]) and (
-            position - half_width < lane_right_edges[side][lane] + 0.5
-        ):
-            lane += 1
-        if lane == len(lane_right_edges[side]):
-            lane_right_edges[side].append(float("-inf"))
-        lane_right_edges[side][lane] = position + half_width
-        lane_assignments.append((side, lane))
-
-    lane_count = max((lane + 1 for _, lane in lane_assignments), default=1)
-    figure_height = max(5.5, 2.8 + lane_count * 0.9)
-    figure = Figure(figsize=(figure_width, figure_height))
+    count = len(rows)
+    fig_height = max(4.5, 1.05 + count * 0.58)
+    figure = Figure(figsize=(16, fig_height), constrained_layout=False)
     FigureCanvasAgg(figure)
     axis = figure.add_subplot(1, 1, 1)
-    axis.set_xlim(
-        datetime.combine(period_start - timedelta(days=1), datetime.min.time()),
-        datetime.combine(period_end + timedelta(days=2), datetime.min.time()),
-    )
-    axis.set_ylim(
-        -lane_count - 0.8,
-        lane_count + (2.0 if milestones else 0.8),
-    )
-    axis.set_yticks([])
+    left = datetime.combine(period_start, datetime.min.time())
+    right = datetime.combine(period_end + timedelta(days=1), datetime.min.time())
+    axis.set_xlim(left, right)
+    axis.set_ylim(-0.7, count - 0.3)
+    axis.set_yticks(list(range(count)))
+    labels = []
+    for task, start_day, finish_day, total_hours, duration_days, _, _ in rows:
+        name = shorten(f"{task.task_id} — {task.name}", width=42, placeholder="...")
+        if mode == "prevu":
+            labels.append(f"{name}   ({total_hours:g} h · {duration_days} j ouvrés)")
+        else:
+            labels.append(f"{name}   ({total_hours:g} h réelles)")
+    axis.set_yticklabels(labels, fontsize=8)
+    axis.invert_yaxis()
     axis.xaxis_date()
     date_format = "%d/%m/%Y" if period_start.year != period_end.year else "%d/%m"
     axis.xaxis.set_major_formatter(DateFormatter(date_format))
-    axis.grid(axis="x", linestyle=":", alpha=0.35)
-    axis.set_xlabel("Date")
+    import matplotlib.dates as mdates
+    span_days = max(1, (period_end - period_start).days)
+    axis.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=5, maxticks=14))
+    axis.grid(axis="x", linestyle="--", alpha=0.35, zorder=0)
+    axis.set_axisbelow(True)
+    axis.set_xlabel("Période")
     title_scope = f" — {person}" if person else ""
-    axis.set_title(f"Frise chronologique{title_scope} — {period_start:%d/%m/%Y} au {period_end:%d/%m/%Y}")
-
-    start_x = datetime.combine(period_start, datetime.min.time())
-    end_x = datetime.combine(period_end + timedelta(days=1), datetime.min.time())
-    axis.annotate(
-        "",
-        xy=(end_x, 0),
-        xytext=(start_x, 0),
-        arrowprops={
-            "arrowstyle": "-|>",
-            "mutation_scale": 18,
-            "linewidth": 2.2,
-            "color": "#344054",
-            "zorder": 2,
-        },
+    mode_title = "prévisionnelle" if mode == "prevu" else "réelle"
+    axis.set_title(
+        f"Frise {mode_title}{title_scope} — {period_start:%d/%m/%Y} au {period_end:%d/%m/%Y}",
+        loc="left", fontsize=13, fontweight="bold", pad=18,
     )
-    colors = {"critical": "#d1495b", "other": "#377eb8", "actual": "#079455"}
-    for item, label, label_width, (side, lane) in zip(
-        timeline_items, labels, label_widths, lane_assignments
-    ):
-        task, task_start, task_finish, _, _, critical, days = item
-        marker_x = datetime.combine(task_start, datetime.min.time()) + timedelta(hours=12)
-        y = (lane + 1) * (1 if side == 0 else -1)
-        color = (
-            colors["actual"] if mode == "reel"
-            else colors["critical"] if critical
-            else colors["other"]
+    colors = {"critical": "#d1495b", "other": "#377eb8", "actual": "#12a36d"}
+    for y, item in enumerate(rows):
+        task, start_day, finish_day, total_hours, duration_days, critical, days = item
+        start_dt = datetime.combine(start_day, datetime.min.time())
+        finish_exclusive = datetime.combine(finish_day + timedelta(days=1), datetime.min.time())
+        color = colors["actual"] if mode == "reel" else (colors["critical"] if critical else colors["other"])
+        axis.barh(
+            y, (finish_exclusive - start_dt).days, left=start_dt, height=0.52,
+            color=color, edgecolor="white", linewidth=0.8, alpha=0.92, zorder=3,
         )
-        position = (task_start - period_start).days + 0.5
-        half_width = label_width / 2
-        alignment = (
-            "right" if position + half_width > period_days
-            else "left" if position - half_width < 0
-            else "center"
-        )
-        axis.plot(
-            marker_x,
-            0,
-            marker="o",
-            markersize=8,
-            markerfacecolor=color,
-            markeredgecolor="white",
-            markeredgewidth=1.2,
-            zorder=4,
-        )
-        if task_finish > task_start:
-            axis.plot(
-                [
-                    datetime.combine(task_start, datetime.min.time()) + timedelta(hours=12),
-                    datetime.combine(task_finish, datetime.min.time()) + timedelta(hours=12),
-                ],
-                [0, 0],
-                color=color,
-                linewidth=4 if mode == "prevu" else 3,
-                alpha=0.75,
-                zorder=3,
-            )
         if mode == "reel":
-            for actual_day in days:
-                actual_x = (
-                    datetime.combine(actual_day, datetime.min.time())
-                    + timedelta(hours=12)
-                )
-                axis.plot(
-                    actual_x,
-                    0,
-                    marker="o",
-                    markersize=5,
-                    markerfacecolor=color,
-                    markeredgecolor="white",
-                    markeredgewidth=0.7,
-                    zorder=5,
-                )
-        axis.plot(
-            [marker_x, marker_x],
-            [0.08 if side == 0 else -0.08, y * 0.78],
-            color=color,
-            linewidth=1,
-            alpha=0.8,
-            zorder=1,
+            for actual_day, hours in days.items():
+                x = datetime.combine(actual_day, datetime.min.time()) + timedelta(hours=12)
+                axis.scatter([x], [y], s=22, color="white", edgecolors=color, linewidths=1, zorder=4)
+        # Date labels outside the bar make the extent clear even for short tasks.
+        axis.annotate(
+            f"{start_day:%d/%m}", (start_dt, y), xytext=(0, -13),
+            textcoords="offset points", ha="left", va="top", fontsize=7, color="#344054",
+            clip_on=True,
         )
-        axis.text(
-            marker_x,
-            y,
-            label,
-            ha=alignment,
-            va="bottom" if side == 0 else "top",
-            fontsize=8,
-            color="#101828",
-            bbox={
-                "boxstyle": "round,pad=0.45",
-                "facecolor": (
-                    "#ecfdf3" if mode == "reel"
-                    else "#fff4f3" if critical
-                    else "#eff8ff"
-                ),
-                "edgecolor": color,
-                "linewidth": 0.8,
-            },
-            zorder=3,
-        )
+        if finish_day != start_day:
+            axis.annotate(
+                f"{finish_day:%d/%m}", (finish_exclusive, y), xytext=(0, -13),
+                textcoords="offset points", ha="right", va="top", fontsize=7, color="#344054",
+                clip_on=True,
+            )
 
-    visible_milestones = [
-        (name, day) for name, day in (milestones or [])
-        if period_start <= day <= period_end
-    ]
+    visible_milestones = [(name, day) for name, day in (milestones or [])
+                          if period_start <= day <= period_end]
     for name, day in visible_milestones:
         x = datetime.combine(day, datetime.min.time()) + timedelta(hours=12)
-        axis.axvline(x, color="#b54708", linestyle="--", linewidth=1.2, alpha=0.8)
-        axis.text(
-            x, lane_count + 0.45, shorten(f"◆ {name}", width=28, placeholder="..."),
-            rotation=35, ha="left", va="bottom", fontsize=8, color="#b54708",
-        )
+        axis.axvline(x, color="#b54708", linestyle="--", linewidth=1.1, alpha=0.85, zorder=2)
+        axis.text(x, 1.005, shorten(f"◆ {name}", width=24, placeholder="..."),
+                  transform=axis.get_xaxis_transform(), rotation=0, ha="left", va="bottom",
+                  fontsize=7, color="#b54708", clip_on=True)
 
     if mode == "prevu":
-        axis.legend(handles=[
+        legend = [
             Patch(color=colors["critical"], label="Chemin critique"),
             Patch(color=colors["other"], label="Autres tâches"),
-        ], loc="upper center", bbox_to_anchor=(0.5, 1.12), ncol=2, frameon=False)
+        ]
         subtitle = (
-            "Frise chronologique prévisionnelle : tâches positionnées selon leur "
-            "début prévu; effort et durée ouvrée indiqués sur chaque tâche. "
-            f"{len(timeline_items)} tâche(s) sur la période."
+            "Chaque barre représente la période de la tâche. Les dates du WBS sont utilisées "
+            "lorsque début et fin sont renseignés; sinon, le planning calculé sert de repli. "
+            f"{count} tâche(s) affichée(s)."
         )
     else:
-        axis.legend(
-            handles=[Patch(color=colors["actual"], label="Activité réelle")],
-            loc="upper center",
-            bbox_to_anchor=(0.5, 1.12),
-            frameon=False,
-        )
+        legend = [Patch(color=colors["actual"], label="Période d'activité réelle")]
         subtitle = (
-            "Frise chronologique réelle : repères sur les jours avec heures saisies, "
-            "positionnés selon la première activité de chaque tâche. "
-            f"{len(timeline_items)} tâche(s), heures réelles cumulées et période "
-            "d'activité indiquées."
+            "Les barres couvrent la première et la dernière date de saisie; les points indiquent "
+            f"les jours où des heures ont été enregistrées. {count} tâche(s) affichée(s)."
         )
         if unmatched:
             subtitle += ". Activités non attribuées : " + "; ".join(unmatched[:5])
             if len(unmatched) > 5:
                 subtitle += f" (+{len(unmatched) - 5})"
-        if not timeline_items:
-            axis.text(
-                0.5,
-                0.5,
-                "Aucune activité réelle enregistrée dans cette période",
-                ha="center",
-                va="center",
-                transform=axis.transAxes,
-                color="#667085",
-            )
-    if person:
-        subtitle = f"Membre : {person}. " + subtitle
+    axis.legend(handles=legend, loc="upper right", frameon=False, ncol=2, fontsize=8)
     if visible_milestones:
         subtitle += " Jalons : " + ", ".join(
             f"{name} ({day:%d/%m/%Y})" for name, day in visible_milestones
         ) + "."
-    figure.subplots_adjust(top=0.84, bottom=0.14, left=0.04, right=0.98)
-    figure.text(0.025, 0.025, subtitle, fontsize=8, wrap=True)
+    axis.spines["top"].set_visible(False)
+    axis.spines["right"].set_visible(False)
+    axis.spines["left"].set_visible(False)
+    axis.tick_params(axis="y", length=0, pad=8)
+    figure.subplots_adjust(left=0.30, right=0.98, top=0.90, bottom=0.13)
+    figure.text(0.02, 0.025, subtitle, fontsize=8, wrap=True)
     output = BytesIO()
-    figure.savefig(output, format="png", dpi=150)
+    figure.savefig(output, format="png", dpi=160, bbox_inches="tight")
     output.seek(0)
     return output, subtitle
