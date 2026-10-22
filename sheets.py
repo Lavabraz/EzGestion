@@ -29,7 +29,10 @@ class GoogleSheetWriter:
     def __init__(self):
         self.spreadsheet_id = os.getenv("GOOGLE_SPREADSHEET_ID", "").strip()
         self.worksheet_name = os.getenv(
-            "GOOGLE_WORKSHEET_NAME", "Copie de HeuresIndividuelles"
+            "GOOGLE_WORKSHEET_NAME", "Heures"
+        ).strip()
+        self.sprint_worksheet_name = os.getenv(
+            "GOOGLE_SPRINT_WORKSHEET_NAME", "SprintManagement"
         ).strip()
         self.start_row = int(os.getenv("GOOGLE_DATA_START_ROW", "4"))
         self.wbs_worksheet_name = os.getenv("GOOGLE_WBS_WORKSHEET_NAME", "WBS").strip()
@@ -66,6 +69,7 @@ class GoogleSheetWriter:
         self.spreadsheet = self.client.open_by_key(self.spreadsheet_id)
         self.worksheet = self.spreadsheet.worksheet(self.worksheet_name)
         self.wbs_worksheet = self.spreadsheet.worksheet(self.wbs_worksheet_name)
+        self.sprint_worksheet = self.spreadsheet.worksheet(self.sprint_worksheet_name)
         self.wbs_tasks = []
         self.refresh_wbs_tasks()
 
@@ -193,8 +197,61 @@ class GoogleSheetWriter:
             for row in values:
                 if len(row) < 3 or not any(str(cell).strip() for cell in row):
                     continue
-                activities.append((row[0], row[1], row[2]))
+                activities.append((row[0], row[1], row[2], member["display"]))
         return wbs_rows, activities
+
+    def read_sprint_management_data(self):
+        """Lit les sprints, tâches affectées et jalons depuis SprintManagement."""
+        rows = self.sprint_worksheet.get("A1:R", value_render_option="UNFORMATTED_VALUE")
+
+        def cell(row, index):
+            return row[index] if index < len(row) else ""
+
+        def normalized(value):
+            return str(value or "").strip().casefold()
+
+        sprint_rows, task_rows, milestone_rows = [], [], []
+        for index, row in enumerate(rows):
+            headers = [normalized(value) for value in row]
+            if all(key in headers for key in ("sprint", "début", "fin", "objectif")):
+                for data in rows[index + 1:]:
+                    name = str(cell(data, headers.index("sprint")) or "").strip()
+                    if name:
+                        sprint_rows.append({
+                            "sprint": name,
+                            "start": cell(data, headers.index("début")),
+                            "end": cell(data, headers.index("fin")),
+                            "objective": cell(data, headers.index("objectif")),
+                        })
+                break
+        for index, row in enumerate(rows):
+            headers = [normalized(value) for value in row]
+            if all(key in headers for key in ("sprint", "id wbs", "tâche")):
+                for data in rows[index + 1:]:
+                    sprint_name = str(cell(data, headers.index("sprint")) or "").strip()
+                    task_id = str(cell(data, headers.index("id wbs")) or "").strip()
+                    task_name = str(cell(data, headers.index("tâche")) or "").strip()
+                    if sprint_name and task_id and task_name:
+                        task_rows.append({
+                            "sprint": sprint_name,
+                            "task_id": task_id.removesuffix(".0"),
+                            "status": cell(data, headers.index("statut")) if "statut" in headers else "",
+                            "name": task_name,
+                            "assignees": str(cell(data, headers.index("répartition")) or "").strip()
+                                if "répartition" in headers else "",
+                        })
+                break
+        for index, row in enumerate(rows):
+            headers = [normalized(value) for value in row]
+            if all(key in headers for key in ("sprint", "jalon", "date de livraison")):
+                for data in rows[index + 1:]:
+                    sprint_name = str(cell(data, headers.index("sprint")) or "").strip()
+                    name = str(cell(data, headers.index("jalon")) or "").strip()
+                    day = cell(data, headers.index("date de livraison"))
+                    if sprint_name and name and day not in ("", None):
+                        milestone_rows.append({"sprint": sprint_name, "name": name, "date": day})
+                break
+        return sprint_rows, task_rows, milestone_rows
 
     def _wbs_task_at(self, row: int) -> str:
         if row < self.wbs_start_row:
