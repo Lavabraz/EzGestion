@@ -307,6 +307,12 @@ def _make_timeline(
         sheet_writer.wbs_start_row,
         tolerate_planning_errors=mode == "reel",
     )
+    from gantt import parse_sheet_date
+    selected_milestones = [
+        (item["name"], parse_sheet_date(item["date"]))
+        for item in milestone_rows
+        if parse_sheet_date(item["date"]) is not None
+    ]
     if mode == "global":
         if sprint or person:
             raise ValueError("La vue globale couvre tout le projet : ne renseignez pas sprint ou personne.")
@@ -345,12 +351,6 @@ def _make_timeline(
     if sprint and selected_sprint is None:
         available = ", ".join(item["sprint"] for item in sprint_rows) or "aucun sprint"
         raise ValueError(f"Sprint {sprint!r} introuvable dans SprintManagement. Sprints disponibles : {available}.")
-    from gantt import parse_sheet_date
-    selected_milestones = [
-        (item["name"], parse_sheet_date(item["date"]))
-        for item in milestone_rows
-        if parse_sheet_date(item["date"]) is not None
-    ]
     selected_ids = None
     if selected_sprint:
         selected_ids = {
