@@ -967,6 +967,7 @@ def render_timeline(
             tasks, period_start, period_end, calendar,
             person=person, selected_task_ids=selected_task_ids,
             critical_ids=critical_ids,
+            filter_person_assignees=not (selected_task_ids is not None and person is not None),
         )
         if not rows:
             raise ValueError("Aucune tâche du sprint à afficher avec ces filtres.")
