@@ -5,6 +5,7 @@ import math
 import os
 import threading
 from datetime import date, datetime, time
+from io import BytesIO
 from zoneinfo import ZoneInfo
 
 import discord
@@ -19,6 +20,7 @@ from gantt import (
     infer_period_bounds,
     parse_gantt_data,
     render_gantt,
+    render_timeline,
 )
 from parser import parse_activity
 from recurring_activities import activities_for_date
@@ -296,7 +298,7 @@ def _make_timeline(
     mode: str,
     sprint: str | None = None,
     person: str | None = None,
-) -> tuple[str | None, str, str | None]:
+) -> tuple[BytesIO | None, str | None, str, str | None]:
     sheet_writer = _get_writer()
     wbs_rows, activity_rows = sheet_writer.read_gantt_data()
     sprint_rows, sprint_task_rows, _ = sheet_writer.read_sprint_management_data()
@@ -342,7 +344,7 @@ def _make_timeline(
             f"Frise globale prévisionnelle mise à jour dans Google Sheets pour la période "
             f"du {start:%d/%m/%Y} au {end:%d/%m/%Y}."
         )
-        return sheet_url, description, sheet_error
+        return None, sheet_url, description, sheet_error
 
     selected_sprint = next(
         (item for item in sprint_rows if item["sprint"].casefold() == sprint.casefold()),
@@ -400,6 +402,18 @@ def _make_timeline(
     )
     if not math.isfinite(hours_per_person_per_day) or hours_per_person_per_day <= 0:
         raise ValueError("GANTT_HOURS_PER_PERSON_PER_DAY doit être supérieur à zéro.")
+    image, description = render_timeline(
+        tasks,
+        start,
+        end,
+        calendar,
+        hours_per_person_per_day,
+        mode=mode,
+        activity_rows=activity_rows,
+        person=person,
+        milestones=selected_milestones,
+        selected_task_ids=selected_ids,
+    )
     try:
         sheet_url, _ = sheet_writer.write_timeline_sheet(
             tasks,
@@ -416,15 +430,14 @@ def _make_timeline(
         )
         sheet_error = None
     except Exception as error:
-        log.exception("Écriture de la frise dans Google Sheets échouée")
+        log.exception("Image de frise générée, mais écriture Google Sheets échouée")
         sheet_url = None
         sheet_error = str(error)
     description = (
         f"Frise {'prévisionnelle' if mode == 'prevu' else 'réelle'} "
-        f"mise à jour dans Google Sheets pour la période "
-        f"du {start:%d/%m/%Y} au {end:%d/%m/%Y}."
+        f"générée pour la période du {start:%d/%m/%Y} au {end:%d/%m/%Y}."
     )
-    return sheet_url, description, sheet_error
+    return image, sheet_url, description, sheet_error
 
 
 
@@ -474,7 +487,7 @@ async def frise(
 
     await interaction.response.defer(thinking=True)
     try:
-        sheet_url, description, sheet_error = await asyncio.to_thread(
+        image, sheet_url, description, sheet_error = await asyncio.to_thread(
             _make_timeline, period_start, period_end, mode, sprint, personne
         )
     except Exception as error:
@@ -492,10 +505,18 @@ async def frise(
     )
     if sheet_error:
         log.error("Erreur Google Sheets pendant /frise : %s", sheet_error)
-    await interaction.followup.send(
-        content=f"{description[:1100]}\n{sheet_status}",
-        allowed_mentions=discord.AllowedMentions.none(),
-    )
+    message_content = f"{description[:900]}\\n{sheet_status}"
+    if image is None:
+        await interaction.followup.send(
+            content=message_content,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+    else:
+        await interaction.followup.send(
+            content=message_content,
+            file=discord.File(fp=image, filename="frise.png"),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
 
 @frise.autocomplete("sprint")
