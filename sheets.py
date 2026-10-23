@@ -331,30 +331,52 @@ class GoogleSheetWriter:
                     if not name:
                         break
                     sprint_rows.append({
-                            "sprint": name,
-                            "start": cell(data, headers.index("début")),
-                            "end": cell(data, headers.index("fin")),
-                            "objective": cell(data, headers.index("objectif")),
-                        })
+                        "sprint": name,
+                        "start": cell(data, headers.index("début")),
+                        "end": cell(data, headers.index("fin")),
+                        "objective": cell(data, headers.index("objectif")),
+                    })
                 break
-        for index, row in enumerate(rows):
-            headers = [normalized(value) for value in row]
-            if all(key in headers for key in ("sprint", "id wbs", "tâche")):
-                for data in rows[index + 1:]:
-                    sprint_name = str(cell(data, headers.index("sprint")) or "").strip()
-                    task_id = str(cell(data, headers.index("id wbs")) or "").strip()
-                    task_name = str(cell(data, headers.index("tâche")) or "").strip()
-                    if not sprint_name or not task_id or not task_name:
-                        break
-                    task_rows.append({
-                            "sprint": sprint_name,
-                            "task_id": task_id.removesuffix(".0"),
-                            "status": cell(data, headers.index("statut")) if "statut" in headers else "",
-                            "name": task_name,
-                            "assignees": str(cell(data, headers.index("répartition")) or "").strip()
-                                if "répartition" in headers else "",
-                        })
+
+        # Le tableau des tâches commence à la ligne 21 : l'ID WBS est en G
+        # et le nom de la tâche en I. Le nom du sprint est lu depuis la colonne
+        # dont l'en-tête contient "sprint" dans les lignes précédentes; les
+        # cellules fusionnées sont prises en charge en conservant la dernière valeur.
+        sprint_column = None
+        for header_row in rows[:20]:
+            for column, value in enumerate(header_row):
+                if normalized(value) == "sprint":
+                    sprint_column = column
+                    break
+            if sprint_column is not None:
                 break
+        current_sprint = ""
+        for data in rows[20:]:
+            sprint_name = str(cell(data, sprint_column) or "").strip() if sprint_column is not None else ""
+            if sprint_name:
+                current_sprint = sprint_name
+            task_id = str(cell(data, 6) or "").strip()
+            task_name = str(cell(data, 8) or "").strip()
+            if not task_id and not task_name:
+                continue
+            if not task_id or not task_name:
+                log.warning("Ligne SprintManagement incomplète ignorée : ID=%r, tâche=%r", task_id, task_name)
+                continue
+            if not current_sprint:
+                # Repli sur le sprint unique si le tableau ne répète pas son nom
+                # dans les lignes de tâches.
+                if len(sprint_rows) == 1:
+                    current_sprint = sprint_rows[0]["sprint"]
+                else:
+                    log.warning("Tâche SprintManagement!G:I sans sprint associé : %s — %s", task_id, task_name)
+                    continue
+            task_rows.append({
+                "sprint": current_sprint,
+                "task_id": task_id.removesuffix(".0"),
+                "status": "",
+                "name": task_name,
+                "assignees": "",
+            })
         for index, row in enumerate(rows):
             headers = [normalized(value) for value in row]
             if all(key in headers for key in ("sprint", "jalon", "date de livraison")):
