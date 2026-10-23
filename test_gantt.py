@@ -7,6 +7,7 @@ from gantt import (
     aggregate_actuals,
     french_public_holidays,
     infer_period_bounds,
+    important_task_ids,
     parse_sheet_date,
     parse_gantt_data,
     parse_wbs_tasks,
@@ -243,6 +244,21 @@ class GanttTests(unittest.TestCase):
         self.assertIn("1 tâche(s)", description)
         self.assertIn("heures réelles cumulées", description)
         image.close()
+
+
+    def test_important_task_ids_include_critical_and_high_impact_tasks(self):
+        tasks = [
+            WbsTask("1", "Base", "Conception", 7, ("A",), (), None, None, 0),
+            WbsTask("2", "Branche A", "Développement", 7, ("A",), ("1",), None, None, 0),
+            WbsTask("3", "Branche B", "Développement", 7, ("A",), ("1",), None, None, 0),
+            WbsTask("4", "Suite A", "Validation", 7, ("A",), ("2",), None, None, 0),
+            WbsTask("5", "Suite B", "Validation", 7, ("A",), ("3",), None, None, 0),
+        ]
+        planned = plan_tasks(tasks, date(2026, 1, 5), date(2026, 2, 27), self.calendar)
+        important = important_task_ids(planned)
+        self.assertTrue(important)
+        self.assertTrue({item.task.task_id for item in planned if item.critical} <= important)
+        self.assertIn("1", important)
 
 
 if __name__ == "__main__":
