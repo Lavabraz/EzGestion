@@ -298,7 +298,7 @@ def _make_timeline(
     mode: str,
     sprint: str | None = None,
     person: str | None = None,
-) -> tuple[BytesIO, str, str]:
+) -> tuple[BytesIO, str | None, str, str | None]:
     sheet_writer = _get_writer()
     wbs_rows, activity_rows = sheet_writer.read_gantt_data()
     sprint_rows, sprint_task_rows, milestone_rows = sheet_writer.read_sprint_management_data()
@@ -324,9 +324,6 @@ def _make_timeline(
             for item in milestone_rows
             if parse_sheet_date(item["date"]) is not None
         ]
-        sheet_url, _ = sheet_writer.write_global_timeline_sheet(
-            tasks, start, end, calendar, hours_per_person_per_day, global_milestones
-        )
         image, description = render_timeline(
             tasks,
             start,
@@ -337,7 +334,16 @@ def _make_timeline(
             activity_rows=activity_rows,
             milestones=global_milestones,
         )
-        return image, sheet_url, description
+        try:
+            sheet_url, _ = sheet_writer.write_global_timeline_sheet(
+                tasks, start, end, calendar, hours_per_person_per_day, global_milestones
+            )
+            sheet_error = None
+        except Exception as error:
+            log.exception("Image de frise globale générée, mais écriture Google Sheets échouée")
+            sheet_url = None
+            sheet_error = str(error)
+        return image, sheet_url, description, sheet_error
     selected_sprint = next(
         (item for item in sprint_rows if item["sprint"].casefold() == sprint.casefold()),
         None,
@@ -393,19 +399,6 @@ def _make_timeline(
     )
     if not math.isfinite(hours_per_person_per_day) or hours_per_person_per_day <= 0:
         raise ValueError("GANTT_HOURS_PER_PERSON_PER_DAY doit être supérieur à zéro.")
-    sheet_url, _ = sheet_writer.write_timeline_sheet(
-        tasks,
-        start,
-        end,
-        calendar,
-        hours_per_person_per_day,
-        mode,
-        activity_rows,
-        person,
-        selected_milestones,
-        selected_ids,
-        sprint,
-    )
     image, description = render_timeline(
         tasks,
         start,
@@ -418,7 +411,26 @@ def _make_timeline(
         milestones=selected_milestones,
         selected_task_ids=selected_ids,
     )
-    return image, sheet_url, description
+    try:
+        sheet_url, _ = sheet_writer.write_timeline_sheet(
+            tasks,
+            start,
+            end,
+            calendar,
+            hours_per_person_per_day,
+            mode,
+            activity_rows,
+            person,
+            selected_milestones,
+            selected_ids,
+            sprint,
+        )
+        sheet_error = None
+    except Exception as error:
+        log.exception("Image de frise générée, mais écriture Google Sheets échouée")
+        sheet_url = None
+        sheet_error = str(error)
+    return image, sheet_url, description, sheet_error
 
 
 
@@ -468,7 +480,7 @@ async def frise(
 
     await interaction.response.defer(thinking=True)
     try:
-        image, sheet_url, description = await asyncio.to_thread(
+        image, sheet_url, description, sheet_error = await asyncio.to_thread(
             _make_timeline, period_start, period_end, mode, sprint, personne
         )
     except Exception as error:
@@ -479,8 +491,15 @@ async def frise(
         await interaction.followup.send(f"Impossible de générer la frise : {error}")
         return
 
+    sheet_status = (
+        f"Version Google Sheets : {sheet_url}"
+        if sheet_url
+        else "⚠️ L’image a été générée, mais la mise à jour Google Sheets a échoué."
+    )
+    if sheet_error:
+        log.error("Erreur Google Sheets pendant /frise : %s", sheet_error)
     await interaction.followup.send(
-        content=f"{description[:1300]}\nVersion Google Sheets : {sheet_url}",
+        content=f"{description[:1100]}\n{sheet_status}",
         file=discord.File(fp=image, filename="frise.png"),
         allowed_mentions=discord.AllowedMentions.none(),
     )
