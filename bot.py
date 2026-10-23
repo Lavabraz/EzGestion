@@ -19,6 +19,7 @@ from gantt import (
     french_public_holidays,
     infer_period_bounds,
     parse_gantt_data,
+    plan_tasks,
     render_gantt,
     render_timeline,
 )
@@ -301,7 +302,7 @@ def _make_timeline(
 ) -> tuple[BytesIO | None, str | None, str, str | None]:
     sheet_writer = _get_writer()
     wbs_rows, activity_rows = sheet_writer.read_gantt_data()
-    sprint_rows, sprint_task_rows, _ = sheet_writer.read_sprint_management_data()
+    sprint_rows, sprint_task_rows, sprint_milestone_rows = sheet_writer.read_sprint_management_data()
     milestone_rows = sheet_writer.read_livrables_milestones()
     tasks, activity_rows = parse_gantt_data(
         wbs_rows,
@@ -359,6 +360,8 @@ def _make_timeline(
         available = ", ".join(item["sprint"] for item in sprint_rows) or "aucun sprint"
         raise ValueError(f"Sprint {sprint!r} introuvable dans SprintManagement. Sprints disponibles : {available}.")
     selected_ids = None
+    sprint_window = False
+    critical_ids: set[str] | None = None
     if selected_sprint:
         selected_ids = {
             str(item["task_id"]).strip().removesuffix(".0")
@@ -403,38 +406,49 @@ def _make_timeline(
                     f"Aucune tâche du sprint {sprint!r} n'est répartie sur {person!r} "
                     "dans la colonne Répartition de SprintManagement."
                 )
-        # Pour une frise de sprint, les dates limites globales du WBS ne doivent
-        # pas exclure les tâches du sprint de sa propre fenêtre. On planifie les
-        # tâches sélectionnées dans les dates du sprint, en ne gardant que les
-        # dépendances internes au sprint.
-        tasks = [
-            replace(
-                task,
-                assignees=sprint_assignments.get(task.task_id) or task.assignees,
-                start_deadline=None,
-                finish_deadline=None,
-                dependencies=tuple(
-                    dependency for dependency in task.dependencies
-                    if dependency in selected_ids
-                ) if task.task_id in selected_ids else task.dependencies,
-            ) if task.task_id in selected_ids else task
-            for task in tasks
-        ]
         from gantt import parse_sheet_date
         sprint_start = parse_sheet_date(selected_sprint["start"])
         sprint_end = parse_sheet_date(selected_sprint["end"])
-        if person and mode == "prevu" and sprint_start and sprint_end:
+        if mode == "prevu":
+            # Frise prévue d'un sprint : on n'affiche que les tâches du sprint
+            # (filtrées sur la personne), avec leurs dates WBS bornées à la
+            # fenêtre du sprint. On NE replanifie PAS le WBS entier dans la
+            # fenêtre du sprint (cause des résultats faux / « planning impossible »).
+            if not (sprint_start and sprint_end):
+                raise ValueError(f"Le sprint {sprint!r} n'a pas de dates de début/fin dans SprintManagement.")
+            sprint_window = True
+            # Chemin critique calculé sur le WBS global, avant toute modification.
+            try:
+                g_start, g_end = infer_period_bounds("prevu", tasks, activity_rows, None, None)
+                g_years = range(g_start.year, g_end.year + 1)
+                g_cal = WorkCalendar(
+                    set().union(*(french_public_holidays(y) for y in g_years)),
+                    configured_vacations(),
+                )
+                critical_ids = {
+                    item.task.task_id
+                    for item in plan_tasks(tasks, g_start, g_end, g_cal)
+                    if item.critical
+                }
+            except ValueError:
+                log.warning("Chemin critique global indisponible", exc_info=True)
+            start = start or sprint_start
+            end = end or sprint_end
+            # Jalons : ceux du sprint (tableau « Jalons des sprints »), sinon
+            # ceux de Livrables tombant dans la fenêtre.
+            sprint_ms = [
+                (item["name"], parse_sheet_date(item["date"]))
+                for item in sprint_milestone_rows
+                if item["sprint"].casefold() == sprint.casefold()
+                and parse_sheet_date(item["date"]) is not None
+            ]
+            if sprint_ms:
+                selected_milestones = sprint_ms
             tasks = [
-                replace(
-                    task,
-                    assignees=sprint_assignments.get(task.task_id, ()) or task.assignees,
-                    start_deadline=None,
-                    finish_deadline=None,
-                    dependencies=tuple(dep for dep in task.dependencies if dep in selected_ids),
-                ) if task.task_id in selected_ids else task
+                replace(task, assignees=sprint_assignments.get(task.task_id) or task.assignees)
+                if task.task_id in selected_ids else task
                 for task in tasks
             ]
-            start, end = sprint_start, sprint_end
         elif person and mode == "reel":
             # En Réel, chercher les dates réellement enregistrées dans Heures
             # pour les tâches du sprint, sans limiter aux dates du sprint.
@@ -501,6 +515,8 @@ def _make_timeline(
         person=person,
         milestones=selected_milestones,
         selected_task_ids=selected_ids,
+        sprint_window=sprint_window,
+        critical_ids=critical_ids,
     )
     try:
         sheet_url, _ = sheet_writer.write_timeline_sheet(
@@ -515,6 +531,8 @@ def _make_timeline(
             selected_milestones,
             selected_ids,
             sprint,
+            sprint_window,
+            critical_ids,
         )
         sheet_error = None
     except Exception as error:
