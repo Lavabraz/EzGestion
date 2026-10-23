@@ -162,3 +162,10 @@ Paramètres disponibles :
 - `debut` et `fin` : dates facultatives au format `JJ/MM/AAAA`.
 
 Sans dates, la période est déduite des données ou du sprint sélectionné. La commande doit être utilisée dans le salon Discord configuré. La commande `/gantt` n'est pas conservée.
+
+
+### Vue globale du projet
+
+La commande `/frise` propose aussi le mode `Globale du projet`. Il crée ou actualise l'onglet `Frise globale` dans le même Google Sheets, avec une échelle hebdomadaire, les groupes de la colonne C du WBS, les jalons de `SprintManagement` et les tâches importantes sélectionnées automatiquement selon le chemin critique et l'impact sur les tâches en aval. Les détails des groupes sont repliés par défaut et peuvent être dépliés avec les commandes de regroupement de lignes de Google Sheets.
+
+La vue globale est prévisionnelle et porte sur tout le projet : les filtres `sprint` et `personne` ne doivent pas être renseignés. Les dates de début et de fin restent facultatives si elles peuvent être déduites des dates du WBS. La feuille est configurée par `GOOGLE_GLOBAL_TIMELINE_WORKSHEET_NAME` (défaut : `Frise globale`).

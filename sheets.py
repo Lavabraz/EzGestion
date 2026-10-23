@@ -595,6 +595,244 @@ class GoogleSheetWriter:
             ) + "."
         return ws.url, summary
 
+
+    def write_global_timeline_sheet(
+        self,
+        tasks,
+        period_start,
+        period_end,
+        calendar,
+        hours_per_person_per_day: float,
+        milestones=None,
+    ) -> tuple[str, str]:
+        """Write a compact project overview with collapsible WBS groups."""
+        from datetime import timedelta
+        from gantt import important_task_ids
+
+        if period_end < period_start:
+            raise ValueError("La date de fin doit être égale ou postérieure à la date de début.")
+        if not tasks:
+            raise ValueError("Aucune tâche WBS disponible pour la frise globale.")
+
+        planned = plan_tasks(
+            tasks, period_start, period_end, calendar, hours_per_person_per_day
+        )
+        planned_by_id = {item.task.task_id: item for item in planned}
+        important_ids = important_task_ids(planned)
+
+        def planned_dates(item):
+            task = item.task
+            if task.start_deadline and task.finish_deadline:
+                start, finish = task.start_deadline, task.finish_deadline
+            else:
+                start, finish = item.start, item.finish
+            if finish < start:
+                raise ValueError(
+                    f"Tâche WBS {task.task_id} : la date de fin précède la date de début."
+                )
+            return start, finish
+
+        grouped = {}
+        for item in planned:
+            task = item.task
+            start, finish = planned_dates(item)
+            if finish < period_start or start > period_end:
+                continue
+            group_name = task.lot.strip() or "Sans groupe"
+            group = grouped.setdefault(group_name, {"items": [], "start": finish, "finish": start})
+            group["items"].append(item)
+            group["start"] = min(group["start"], start)
+            group["finish"] = max(group["finish"], finish)
+
+        if not grouped:
+            raise ValueError("Aucune tâche planifiée dans la période demandée.")
+
+        # Weekly columns keep a whole-project view readable even for multi-year plans.
+        first_week = period_start - timedelta(days=period_start.weekday())
+        week_starts = []
+        cursor = first_week
+        while cursor <= period_end:
+            week_starts.append(cursor)
+            cursor += timedelta(days=7)
+        if len(week_starts) > 520:
+            raise ValueError("La frise globale est limitée à 10 ans (520 semaines).")
+
+        def week_index(day):
+            return (day - first_week).days // 7
+
+        def col_name(number):
+            result = ""
+            while number:
+                number, rem = divmod(number - 1, 26)
+                result = chr(65 + rem) + result
+            return result
+
+        sheet_name = os.getenv("GOOGLE_GLOBAL_TIMELINE_WORKSHEET_NAME", "Frise globale").strip()
+        try:
+            ws = self.spreadsheet.worksheet(sheet_name)
+        except gspread.WorksheetNotFound:
+            ws = self.spreadsheet.add_worksheet(title=sheet_name, rows=500, cols=40)
+
+        values = [
+            [f"Frise globale prévisionnelle — {period_start:%d/%m/%Y} au {period_end:%d/%m/%Y}"],
+            [f"Groupes : {len(grouped)}", f"Jalons : {len(milestones or [])}",
+             f"Tâches importantes : {len(important_ids)}",
+             "Les groupes sont repliés par défaut ; utilisez +/− à gauche pour déplier."],
+        ]
+        header = ["Type", "Groupe / tâche / jalon", "ID WBS", "Début prévu", "Fin prévue", "Durée (j ouvrés)"]
+        header.extend(day.strftime("Sem. %d/%m/%y") for day in week_starts)
+        values.append(header)
+
+        # Keep row metadata so formatting and collapsible groups can be applied after writing.
+        group_rows = []
+        important_rows = []
+        for group_name, group in sorted(grouped.items(), key=lambda pair: (pair[1]["start"], pair[0].casefold())):
+            group_row_index = len(values) + 1
+            start = max(period_start, group["start"])
+            finish = min(period_end, group["finish"])
+            duration = calendar.workday_distance(start, finish) + int(calendar.is_workday(finish))
+            row = ["GROUPE", f"▸ {group_name} ({len(group['items'])} tâches)", "", start.isoformat(), finish.isoformat(), duration]
+            row.extend("■" if start <= week + timedelta(days=6) and finish >= week else "" for week in week_starts)
+            values.append(row)
+            detail_start = len(values) + 1
+            details = [
+                item for item in group["items"]
+                if item.task.task_id in important_ids
+                and planned_dates(item)[1] >= period_start
+                and planned_dates(item)[0] <= period_end
+            ]
+            details.sort(key=lambda item: (planned_dates(item)[0], planned_dates(item)[1], item.task.task_id))
+            row[1] = f"{'▸' if details else '•'} {group_name} ({len(group['items'])} tâches)"
+            for item in details:
+                task = item.task
+                task_start, task_finish = planned_dates(item)
+                task_start = max(period_start, task_start)
+                task_finish = min(period_end, task_finish)
+                task_duration = calendar.workday_distance(task_start, task_finish) + int(calendar.is_workday(task_finish))
+                marker = "CRITIQUE" if item.critical else "IMPACT"
+                task_row = [marker, f"    {task.name}", task.task_id, task_start.isoformat(), task_finish.isoformat(), task_duration]
+                task_row.extend("■" if task_start <= week + timedelta(days=6) and task_finish >= week else "" for week in week_starts)
+                values.append(task_row)
+                important_rows.append((len(values), item, task_start, task_finish))
+            detail_end = len(values)
+            if detail_end >= detail_start:
+                group_rows.append((group_row_index, detail_start, detail_end))
+
+        milestone_rows = []
+        seen_milestones = set()
+        for milestone in milestones or []:
+            name, day = milestone
+            if day is None or not period_start <= day <= period_end:
+                continue
+            key = (str(name).strip().casefold(), day)
+            if key in seen_milestones:
+                continue
+            seen_milestones.add(key)
+            row = ["JALON", f"◆ {name}", "", day.isoformat(), day.isoformat(), 0]
+            row.extend("◆" if week_index(day) == index else "" for index, _ in enumerate(week_starts))
+            values.append(row)
+            milestone_rows.append((len(values), str(name), day))
+
+        values[1][1] = f"Jalons : {len(milestone_rows)}"
+        values[1][2] = f"Tâches importantes : {len(important_rows)}"
+        needed_rows, needed_cols = len(values), len(header)
+        if ws.row_count < needed_rows or ws.col_count < needed_cols:
+            ws.resize(rows=max(ws.row_count, needed_rows), cols=max(ws.col_count, needed_cols))
+        ws.clear()
+        ws.update(range_name="A1", values=values, value_input_option="USER_ENTERED")
+        last_col = col_name(needed_cols)
+        formats = [
+            {"range": f"A1:{last_col}1", "format": {
+                "backgroundColor": {"red": 0.12, "green": 0.18, "blue": 0.29},
+                "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}, "fontSize": 14},
+                "verticalAlignment": "MIDDLE"}},
+            {"range": f"A2:{last_col}2", "format": {
+                "backgroundColor": {"red": 0.91, "green": 0.94, "blue": 0.97},
+                "textFormat": {"fontSize": 9, "foregroundColor": {"red": 0.2, "green": 0.25, "blue": 0.32}},
+                "wrapStrategy": "WRAP"}},
+            {"range": f"A3:{last_col}3", "format": {
+                "backgroundColor": {"red": 0.18, "green": 0.31, "blue": 0.48},
+                "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}},
+                "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE", "wrapStrategy": "WRAP"}},
+            {"range": f"A4:{last_col}{needed_rows}", "format": {"verticalAlignment": "MIDDLE", "textFormat": {"fontSize": 9}}},
+            {"range": f"D4:E{needed_rows}", "format": {"numberFormat": {"type": "DATE", "pattern": "dd/mm/yyyy"}}},
+            {"range": f"A1:{last_col}{needed_rows}", "format": {"borders": {"bottom": {"style": "SOLID", "color": {"red": 0.85, "green": 0.88, "blue": 0.91}}}}},
+        ]
+        for row_index, _, _ in group_rows:
+            formats.append({"range": f"A{row_index}:{last_col}{row_index}", "format": {
+                "backgroundColor": {"red": 0.84, "green": 0.89, "blue": 0.95},
+                "textFormat": {"bold": True, "foregroundColor": {"red": 0.12, "green": 0.22, "blue": 0.36}}}})
+            group_row = values[row_index - 1]
+            group_start = max(period_start, date.fromisoformat(group_row[3]))
+            group_finish = min(period_end, date.fromisoformat(group_row[4]))
+            first_col = 7 + week_index(group_start)
+            final_col = 7 + week_index(group_finish)
+            formats.append({"range": f"G{row_index}:{last_col}{row_index}", "format": {
+                "backgroundColor": {"red": 0.94, "green": 0.96, "blue": 0.98},
+                "horizontalAlignment": "CENTER"}})
+            formats.append({"range": f"{col_name(first_col)}{row_index}:{col_name(final_col)}{row_index}", "format": {
+                "backgroundColor": {"red": 0.25, "green": 0.38, "blue": 0.55},
+                "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}},
+                "horizontalAlignment": "CENTER"}})
+        for row_index, item, task_start, task_finish in important_rows:
+            color = {"red": 0.82, "green": 0.25, "blue": 0.31} if item.critical else {"red": 0.22, "green": 0.49, "blue": 0.75}
+            formats.append({"range": f"G{row_index}:{last_col}{row_index}", "format": {
+                "backgroundColor": {"red": 0.95, "green": 0.96, "blue": 0.97},
+                "horizontalAlignment": "CENTER"}})
+            first_col = 7 + week_index(task_start)
+            final_col = 7 + week_index(task_finish)
+            formats.append({"range": f"{col_name(first_col)}{row_index}:{col_name(final_col)}{row_index}", "format": {
+                "backgroundColor": color, "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}},
+                "horizontalAlignment": "CENTER"}})
+        for row_index, _, day in milestone_rows:
+            col = col_name(7 + week_index(day))
+            formats.append({"range": f"A{row_index}:{last_col}{row_index}", "format": {
+                "backgroundColor": {"red": 1, "green": 0.96, "blue": 0.88},
+                "textFormat": {"bold": True, "foregroundColor": {"red": 0.55, "green": 0.24, "blue": 0.04}}}})
+            formats.append({"range": f"{col}{row_index}", "format": {
+                "backgroundColor": {"red": 0.97, "green": 0.58, "blue": 0.04},
+                "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}},
+                "horizontalAlignment": "CENTER"}})
+        ws.batch_format(formats)
+        ws.freeze(rows=3, cols=6)
+        ws.format("A:A", {"columnWidth": 100})
+        ws.format("B:B", {"columnWidth": 300, "wrapStrategy": "WRAP"})
+        ws.format("C:F", {"columnWidth": 110})
+        ws.format(f"G:{last_col}", {"columnWidth": 70, "horizontalAlignment": "CENTER"})
+
+        # Add collapsible row groups for the important task details. Delete previous
+        # groups first so refreshing the overview does not accumulate row groups.
+        metadata = self.spreadsheet.fetch_sheet_metadata()
+        sheet_meta = next((sheet for sheet in metadata.get("sheets", []) if sheet.get("properties", {}).get("sheetId") == ws.id), {})
+        old_groups = sheet_meta.get("rowGroups", [])
+        requests = []
+        for old_group in sorted(old_groups, key=lambda item: item.get("depth", 1), reverse=True):
+            rg = old_group.get("range", {})
+            if rg.get("startIndex") is not None and rg.get("endIndex") is not None:
+                requests.append({"deleteDimensionGroup": {"range": {
+                    "sheetId": ws.id, "dimension": "ROWS",
+                    "startIndex": rg["startIndex"], "endIndex": rg["endIndex"]}}})
+        for _, detail_start, detail_end in group_rows:
+            requests.append({"addDimensionGroup": {"range": {
+                "sheetId": ws.id, "dimension": "ROWS",
+                "startIndex": detail_start - 1, "endIndex": detail_end}}})
+            requests.append({"updateDimensionGroup": {
+                "range": {"sheetId": ws.id, "dimension": "ROWS",
+                          "startIndex": detail_start - 1, "endIndex": detail_end},
+                "dimensionGroup": {"range": {"sheetId": ws.id, "dimension": "ROWS",
+                                             "startIndex": detail_start - 1, "endIndex": detail_end},
+                                   "depth": 1, "collapsed": True},
+                "fields": "collapsed"}})
+        if requests:
+            self.spreadsheet.batch_update({"requests": requests})
+
+        summary = (
+            f"Frise globale prévisionnelle générée dans « {sheet_name} » : "
+            f"{len(grouped)} groupe(s), {len(milestone_rows)} jalon(s), "
+            f"{len(important_rows)} tâche(s) importante(s)."
+        )
+        return ws.url, summary
+
     def _wbs_task_at(self, row: int) -> str:
         if row < self.wbs_start_row:
             raise ValueError("La tâche WBS sélectionnée n'est pas valide.")

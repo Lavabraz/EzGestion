@@ -466,6 +466,38 @@ def plan_tasks(
     ]
 
 
+
+def important_task_ids(planned: list[PlannedTask]) -> set[str]:
+    """Return critical tasks and non-critical tasks with substantial downstream impact."""
+    by_id = {item.task.task_id: item for item in planned}
+    successors: dict[str, set[str]] = defaultdict(set)
+    for item in planned:
+        for dependency in item.task.dependencies:
+            if dependency in by_id:
+                successors[dependency].add(item.task.task_id)
+
+    impact: dict[str, int] = {}
+    for task_id in by_id:
+        visited: set[str] = set()
+        pending = list(successors[task_id])
+        while pending:
+            successor = pending.pop()
+            if successor in visited:
+                continue
+            visited.add(successor)
+            pending.extend(successors[successor] - visited)
+        impact[task_id] = len(visited)
+
+    # Critical-path tasks are always shown. Also include non-critical tasks that
+    # unlock at least three downstream tasks or have at least two direct successors.
+    return {
+        task_id
+        for task_id, item in by_id.items()
+        if item.critical
+        or impact[task_id] >= 3
+        or len(successors[task_id]) >= 2
+    }
+
 def aggregate_actuals(
     tasks: list[WbsTask],
     activity_rows: list[tuple],
