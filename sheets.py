@@ -517,6 +517,7 @@ class GoogleSheetWriter:
                 tasks, period_start, period_end, calendar,
                 person=person, selected_task_ids=selected_task_ids,
                 critical_ids=critical_ids,
+                filter_person_assignees=not (selected_task_ids is not None and person is not None),
             ):
                 rows.append({
                     "task": task, "start": start, "finish": finish,
