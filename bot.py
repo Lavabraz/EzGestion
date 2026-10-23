@@ -298,7 +298,7 @@ def _make_timeline(
     mode: str,
     sprint: str | None = None,
     person: str | None = None,
-) -> tuple[str, str]:
+) -> tuple[BytesIO, str, str]:
     sheet_writer = _get_writer()
     wbs_rows, activity_rows = sheet_writer.read_gantt_data()
     sprint_rows, sprint_task_rows, milestone_rows = sheet_writer.read_sprint_management_data()
@@ -324,9 +324,20 @@ def _make_timeline(
             for item in milestone_rows
             if parse_sheet_date(item["date"]) is not None
         ]
-        return sheet_writer.write_global_timeline_sheet(
+        sheet_url, _ = sheet_writer.write_global_timeline_sheet(
             tasks, start, end, calendar, hours_per_person_per_day, global_milestones
         )
+        image, description = render_timeline(
+            tasks,
+            start,
+            end,
+            calendar,
+            hours_per_person_per_day,
+            mode="prevu",
+            activity_rows=activity_rows,
+            milestones=global_milestones,
+        )
+        return image, sheet_url, description
     selected_sprint = next(
         (item for item in sprint_rows if item["sprint"].casefold() == sprint.casefold()),
         None,
@@ -334,7 +345,13 @@ def _make_timeline(
     if sprint and selected_sprint is None:
         available = ", ".join(item["sprint"] for item in sprint_rows) or "aucun sprint"
         raise ValueError(f"Sprint {sprint!r} introuvable dans SprintManagement. Sprints disponibles : {available}.")
-    selected_milestones = []
+    from gantt import parse_sheet_date
+    selected_milestones = [
+        (item["name"], parse_sheet_date(item["date"]))
+        for item in milestone_rows
+        if parse_sheet_date(item["date"]) is not None
+        and (not sprint or item["sprint"].casefold() == sprint.casefold())
+    ]
     selected_ids = None
     if selected_sprint:
         selected_ids = {
@@ -365,12 +382,6 @@ def _make_timeline(
             start = sprint_start
         if end is None:
             end = sprint_end
-        selected_milestones = [
-            (item["name"], parse_sheet_date(item["date"]))
-            for item in milestone_rows
-            if item["sprint"].casefold() == sprint.casefold()
-            and parse_sheet_date(item["date"]) is not None
-        ]
     start, end = infer_period_bounds(mode, tasks, activity_rows, start, end)
     if (end - start).days > 365:
         raise ValueError("La période demandée ne peut pas dépasser 366 jours.")
@@ -382,7 +393,7 @@ def _make_timeline(
     )
     if not math.isfinite(hours_per_person_per_day) or hours_per_person_per_day <= 0:
         raise ValueError("GANTT_HOURS_PER_PERSON_PER_DAY doit être supérieur à zéro.")
-    return sheet_writer.write_timeline_sheet(
+    sheet_url, _ = sheet_writer.write_timeline_sheet(
         tasks,
         start,
         end,
@@ -395,6 +406,19 @@ def _make_timeline(
         selected_ids,
         sprint,
     )
+    image, description = render_timeline(
+        tasks,
+        start,
+        end,
+        calendar,
+        hours_per_person_per_day,
+        mode=mode,
+        activity_rows=activity_rows,
+        person=person,
+        milestones=selected_milestones,
+        selected_task_ids=selected_ids,
+    )
+    return image, sheet_url, description
 
 
 
@@ -444,7 +468,7 @@ async def frise(
 
     await interaction.response.defer(thinking=True)
     try:
-        image, description = await asyncio.to_thread(
+        image, sheet_url, description = await asyncio.to_thread(
             _make_timeline, period_start, period_end, mode, sprint, personne
         )
     except Exception as error:
@@ -456,7 +480,8 @@ async def frise(
         return
 
     await interaction.followup.send(
-        content=f"{description}\n{image}",
+        content=f"{description[:1300]}\nVersion Google Sheets : {sheet_url}",
+        file=discord.File(fp=image, filename="frise.png"),
         allowed_mentions=discord.AllowedMentions.none(),
     )
 
