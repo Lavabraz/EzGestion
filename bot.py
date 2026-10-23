@@ -375,6 +375,28 @@ def _make_timeline(
             for item in sprint_task_rows
             if item["sprint"].casefold() == sprint.casefold()
         }
+        # La colonne Participation de SprintManagement (N) est la source de vérité
+        # pour le filtre personne : elle représente les personnes ayant travaillé
+        # sur la tâche, contrairement à Répartition qui représente l'affectation.
+        sprint_participants = {
+            str(item["task_id"]).strip().removesuffix(".0"): tuple(
+                name.strip() for name in str(item.get("participants", "")).split(",")
+                if name.strip()
+            )
+            for item in sprint_task_rows
+            if item["sprint"].casefold() == sprint.casefold()
+        }
+        if person:
+            person_key = person.strip().casefold()
+            selected_ids = {
+                task_id for task_id in selected_ids
+                if any(name.casefold() == person_key for name in sprint_participants.get(task_id, ()))
+            }
+            if not selected_ids:
+                raise ValueError(
+                    f"Aucune tâche du sprint {sprint!r} n'indique de participation pour {person!r} "
+                    "dans la colonne Participation de SprintManagement."
+                )
         # Pour une frise de sprint, les dates limites globales du WBS ne doivent
         # pas exclure les tâches du sprint de sa propre fenêtre. On planifie les
         # tâches sélectionnées dans les dates du sprint, en ne gardant que les
