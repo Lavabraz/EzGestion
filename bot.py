@@ -348,9 +348,14 @@ def _make_timeline(
         return None, sheet_url, description, sheet_error
 
     if person:
-        resolved_person = sheet_writer.resolve_member(person)
-        if resolved_person:
-            person = resolved_person
+        # Compatibilité avec les anciennes saisies Discord : Lavabraz est désormais
+        # enregistré sous le nom Nathan dans le Google Sheets.
+        if person.strip().casefold() == "lavabraz":
+            person = "Nathan"
+        else:
+            resolved_person = sheet_writer.resolve_member(person)
+            if resolved_person:
+                person = resolved_person
 
     selected_sprint = next(
         (item for item in sprint_rows if item["sprint"].casefold() == sprint.casefold()),
