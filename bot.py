@@ -505,7 +505,7 @@ async def frise(
     )
     if sheet_error:
         log.error("Erreur Google Sheets pendant /frise : %s", sheet_error)
-    message_content = f"{description[:900]}\\n{sheet_status}"
+    message_content = f"{description[:900]}\n{sheet_status}"
     if image is None:
         await interaction.followup.send(
             content=message_content,
