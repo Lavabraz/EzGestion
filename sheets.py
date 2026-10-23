@@ -829,8 +829,6 @@ class GoogleSheetWriter:
                 "sheetId": ws.id, "dimension": "ROWS",
                 "startIndex": detail_start - 1, "endIndex": detail_end}}})
             requests.append({"updateDimensionGroup": {
-                "range": {"sheetId": ws.id, "dimension": "ROWS",
-                          "startIndex": detail_start - 1, "endIndex": detail_end},
                 "dimensionGroup": {"range": {"sheetId": ws.id, "dimension": "ROWS",
                                              "startIndex": detail_start - 1, "endIndex": detail_end},
                                    "depth": 1, "collapsed": True},
