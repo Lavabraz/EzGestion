@@ -361,38 +361,60 @@ class GoogleSheetWriter:
                     })
                 break
 
-        # Le tableau des tâches du sprint a ses en-têtes à la ligne 21 :
-        # F = Sprint, G = ID WBS, I = nom de tâche. Les données commencent ligne 22.
-        sprint_column, task_id_column, task_name_column = 5, 6, 8
-        current_sprint = ""
-        for data in rows[21:]:
-            sprint_name = str(cell(data, sprint_column) or "").strip()
-            if sprint_name:
-                current_sprint = sprint_name
-            task_id = str(cell(data, task_id_column) or "").strip()
-            task_name = str(cell(data, task_name_column) or "").strip()
-            if not task_id and not task_name:
-                continue
-            if not task_id or not task_name:
-                log.warning(
-                    "Ligne SprintManagement incomplète ignorée : ID=%r, tâche=%r",
-                    task_id, task_name,
-                )
-                continue
-            if not current_sprint:
-                log.warning(
-                    "Tâche SprintManagement!G:I sans sprint associé : %s — %s",
-                    task_id, task_name,
-                )
-                continue
-            task_rows.append({
-                "sprint": current_sprint,
-                "task_id": task_id.removesuffix(".0"),
-                "status": cell(data, 7),
-                "name": task_name,
-                "assignees": str(cell(data, 10) or "").strip(),
-                "participants": str(cell(data, 13) or "").strip(),
-            })
+        # Repérer le tableau par ses en-têtes plutôt que par un numéro de ligne fixe.
+        # Le tableau peut être déplacé dans l'onglet sans que les tâches disparaissent.
+        task_header = None
+        task_header_index = None
+        for index, row in enumerate(rows):
+            headers = [normalized(value) for value in row]
+            if "sprint" in headers and "id wbs" in headers and "tâche" in headers:
+                task_header_index = index
+                task_header = headers
+                break
+
+        if task_header is None:
+            log.error("Tableau des tâches du sprint introuvable dans SprintManagement (en-têtes Sprint / ID WBS / Tâche).")
+        else:
+            sprint_column = task_header.index("sprint")
+            task_id_column = task_header.index("id wbs")
+            task_name_column = task_header.index("tâche")
+            status_column = task_header.index("statut") if "statut" in task_header else None
+            assignees_column = task_header.index("répartition") if "répartition" in task_header else None
+            participants_column = task_header.index("participation") if "participation" in task_header else None
+            current_sprint = ""
+            for data in rows[task_header_index + 1:]:
+                sprint_name = str(cell(data, sprint_column) or "").strip()
+                if sprint_name:
+                    current_sprint = sprint_name
+                task_id = str(cell(data, task_id_column) or "").strip()
+                task_name = str(cell(data, task_name_column) or "").strip()
+                if not task_id and not task_name:
+                    # Ne pas arrêter : d'autres tableaux peuvent être plus bas.
+                    continue
+                if not task_id or not task_name:
+                    log.warning(
+                        "Ligne SprintManagement incomplète ignorée : ID=%r, tâche=%r",
+                        task_id, task_name,
+                    )
+                    continue
+                if not current_sprint:
+                    log.warning(
+                        "Tâche SprintManagement sans sprint associé : %s — %s",
+                        task_id, task_name,
+                    )
+                    continue
+                task_rows.append({
+                    "sprint": current_sprint,
+                    "task_id": task_id.removesuffix(".0"),
+                    "status": cell(data, status_column) if status_column is not None else "",
+                    "name": task_name,
+                    "assignees": str(cell(data, assignees_column) or "").strip() if assignees_column is not None else "",
+                    "participants": str(cell(data, participants_column) or "").strip() if participants_column is not None else "",
+                })
+            log.info(
+                "Tâches lues depuis SprintManagement : %d ; en-têtes ligne %d",
+                len(task_rows), task_header_index + 1,
+            )
         for index, row in enumerate(rows):
             headers = [normalized(value) for value in row]
             if all(key in headers for key in ("sprint", "jalon", "date de livraison")):
