@@ -389,7 +389,7 @@ def _make_timeline(
         # En mode Réel, la source de vérité est l'onglet Heures de la personne.
         # Ne pas filtrer les tâches selon la colonne Participation : une activité
         # réellement enregistrée suffit à faire apparaître la tâche.
-        elif person and mode == "prevu":
+        if person and mode == "prevu":
             person_key = person.strip().casefold()
             selected_ids = {
                 task_id for task_id in selected_ids
@@ -452,7 +452,7 @@ def _make_timeline(
                     continue
                 task_name = str(activity[2] or "").strip()
                 import re
-                match = re.match(r"^\\[([^\\]]+)\\]\\s*", task_name)
+                match = re.match(r"^\[([^\]]+)\]\s*", task_name)
                 if match and match.group(1) in selected_id_set:
                     is_sprint_task = True
                 else:
