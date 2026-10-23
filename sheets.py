@@ -387,6 +387,7 @@ class GoogleSheetWriter:
                 "status": cell(data, 7),
                 "name": task_name,
                 "assignees": str(cell(data, 10) or "").strip(),
+                "participants": str(cell(data, 13) or "").strip(),
             })
         for index, row in enumerate(rows):
             headers = [normalized(value) for value in row]
