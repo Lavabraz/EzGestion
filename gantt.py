@@ -893,6 +893,48 @@ def render_gantt(
     )
 
 
+def sprint_window_rows(
+    tasks: list[WbsTask],
+    window_start: date,
+    window_end: date,
+    calendar: WorkCalendar,
+    *,
+    person: str | None = None,
+    selected_task_ids: set[str] | None = None,
+    critical_ids: set[str] | None = None,
+) -> list[tuple]:
+    """Lignes de frise prévisionnelle pour un sprint, sans replanifier le WBS.
+
+    Chaque tâche du sprint (filtrée sur la personne via « Répartition ») est
+    affichée avec ses dates WBS (« Commencer avant » / « Finir avant ») bornées
+    à la fenêtre du sprint. Si la tâche n'a pas de dates, ou si ses dates sont
+    entièrement hors de la fenêtre (ex. tâche récurrente 26/10 → 15/12 rattachée
+    au sprint 1), elle occupe toute la fenêtre du sprint.
+    """
+    person_key = person.strip().casefold() if person else None
+    rows = []
+    for task in tasks:
+        if selected_task_ids is not None and task.task_id not in selected_task_ids:
+            continue
+        if person_key and not any(n.casefold() == person_key for n in task.assignees):
+            continue
+        start_day, finish_day = window_start, window_end
+        if task.start_deadline and task.finish_deadline:
+            if task.finish_deadline < task.start_deadline:
+                raise ValueError(
+                    f"Tâche WBS {task.task_id} : la date de fin précède la date de début."
+                )
+            clipped_start = max(task.start_deadline, window_start)
+            clipped_finish = min(task.finish_deadline, window_end)
+            if clipped_start <= clipped_finish:
+                start_day, finish_day = clipped_start, clipped_finish
+        duration = calendar.workday_distance(start_day, finish_day) + int(calendar.is_workday(finish_day))
+        critical = bool(critical_ids and task.task_id in critical_ids)
+        rows.append((task, start_day, finish_day, task.effort_hours, duration, critical, {}))
+    rows.sort(key=lambda item: (item[1], item[2], item[0].task_id))
+    return rows
+
+
 def render_timeline(
     tasks: list[WbsTask],
     period_start: date,
@@ -904,6 +946,8 @@ def render_timeline(
     person: str | None = None,
     milestones: list[tuple[str, date]] | None = None,
     selected_task_ids: set[str] | None = None,
+    sprint_window: bool = False,
+    critical_ids: set[str] | None = None,
 ) -> tuple[BytesIO, str]:
     """Render a readable Gantt chart with one horizontal lane per task."""
     if not tasks:
@@ -915,7 +959,15 @@ def render_timeline(
     planned_by_id = {}
     actuals = {}
     task_by_id = {task.task_id: task for task in tasks}
-    if mode == "prevu":
+    if mode == "prevu" and sprint_window:
+        rows = sprint_window_rows(
+            tasks, period_start, period_end, calendar,
+            person=person, selected_task_ids=selected_task_ids,
+            critical_ids=critical_ids,
+        )
+        if not rows:
+            raise ValueError("Aucune tâche du sprint à afficher avec ces filtres.")
+    elif mode == "prevu":
         planned = plan_tasks(
             tasks, period_start, period_end, calendar, hours_per_person_per_day
         )
