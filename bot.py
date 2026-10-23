@@ -375,10 +375,21 @@ def _make_timeline(
             for item in sprint_task_rows
             if item["sprint"].casefold() == sprint.casefold()
         }
+        # Pour une frise de sprint, les dates limites globales du WBS ne doivent
+        # pas exclure les tâches du sprint de sa propre fenêtre. On planifie les
+        # tâches sélectionnées dans les dates du sprint, en ne gardant que les
+        # dépendances internes au sprint.
         tasks = [
-            replace(task, assignees=sprint_assignments[task.task_id])
-            if task.task_id in sprint_assignments and sprint_assignments[task.task_id]
-            else task
+            replace(
+                task,
+                assignees=sprint_assignments.get(task.task_id) or task.assignees,
+                start_deadline=None,
+                finish_deadline=None,
+                dependencies=tuple(
+                    dependency for dependency in task.dependencies
+                    if dependency in selected_ids
+                ) if task.task_id in selected_ids else task.dependencies,
+            ) if task.task_id in selected_ids else task
             for task in tasks
         ]
         from gantt import parse_sheet_date
