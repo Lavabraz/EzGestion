@@ -390,7 +390,10 @@ def _make_timeline(
             person_key = person.strip().casefold()
             selected_ids = {
                 task_id for task_id in selected_ids
-                if any(name.casefold() == person_key for name in sprint_participants.get(task_id, ()))
+                if any(
+                    (sheet_writer.resolve_member(name) or name).casefold() == person_key
+                    for name in sprint_participants.get(task_id, ())
+                )
             }
             if not selected_ids:
                 raise ValueError(
