@@ -307,6 +307,37 @@ def _make_timeline(
         sheet_writer.wbs_start_row,
         tolerate_planning_errors=mode == "reel",
     )
+    if mode == "global":
+        if sprint or person:
+            raise ValueError("La vue globale couvre tout le projet : ne renseignez pas sprint ou personne.")
+        auto_start, auto_end = start is None, end is None
+        milestone_dates = [day for _, day in selected_milestones]
+        start, end = infer_period_bounds("prevu", tasks, activity_rows, start, end)
+        if auto_start and milestone_dates:
+            start = min(start, min(milestone_dates))
+        if auto_end and milestone_dates:
+            end = max(end, max(milestone_dates))
+        years = range(start.year, end.year + 1)
+        holidays = set().union(*(french_public_holidays(year) for year in years))
+        calendar = WorkCalendar(holidays, configured_vacations())
+        hours_per_person_per_day = float(os.getenv("GANTT_HOURS_PER_PERSON_PER_DAY", "7"))
+        if not math.isfinite(hours_per_person_per_day) or hours_per_person_per_day <= 0:
+            raise ValueError("GANTT_HOURS_PER_PERSON_PER_DAY doit être supérieur à zéro.")
+        try:
+            sheet_url, _ = sheet_writer.write_global_timeline_sheet(
+                tasks, start, end, calendar, hours_per_person_per_day, selected_milestones
+            )
+            sheet_error = None
+        except Exception as error:
+            log.exception("Écriture de la frise globale dans Google Sheets échouée")
+            sheet_url = None
+            sheet_error = str(error)
+        description = (
+            f"Frise globale prévisionnelle mise à jour dans Google Sheets pour la période "
+            f"du {start:%d/%m/%Y} au {end:%d/%m/%Y}."
+        )
+        return sheet_url, description, sheet_error
+
     selected_sprint = next(
         (item for item in sprint_rows if item["sprint"].casefold() == sprint.casefold()),
         None,
@@ -399,10 +430,10 @@ def _make_timeline(
 
 @client.tree.command(
     name="frise",
-    description="Générer une frise prévisionnelle ou réelle",
+    description="Générer une frise prévisionnelle, réelle ou globale",
 )
 @app_commands.describe(
-    mode="Frise prévisionnelle ou basée sur les heures réelles",
+    mode="Frise prévisionnelle, basée sur les heures réelles ou vue globale du projet",
     sprint="Sprint à afficher depuis SprintManagement",
     personne="Filtrer la frise sur un membre de l'équipe",
     debut="Début au format JJ/MM/AAAA (sinon déduit du sprint ou des données)",
@@ -411,6 +442,7 @@ def _make_timeline(
 @app_commands.choices(mode=[
     app_commands.Choice(name="Prévu", value="prevu"),
     app_commands.Choice(name="Réel", value="reel"),
+    app_commands.Choice(name="Globale du projet", value="global"),
 ])
 async def frise(
     interaction: discord.Interaction,
@@ -434,7 +466,7 @@ async def frise(
                 raise ValueError(
                     "La date de fin doit être égale ou postérieure à la date de début."
                 )
-            if (period_end - period_start).days > 365:
+            if mode != "global" and (period_end - period_start).days > 365:
                 raise ValueError("La période demandée ne peut pas dépasser 366 jours.")
     except ValueError as error:
         await interaction.response.send_message(f"Paramètres invalides : {error}")
