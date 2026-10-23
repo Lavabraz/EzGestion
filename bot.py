@@ -421,18 +421,21 @@ def _make_timeline(
         sprint_start = parse_sheet_date(selected_sprint["start"])
         sprint_end = parse_sheet_date(selected_sprint["end"])
         if person and sprint_start and sprint_end:
-            # Pour la vue sprint + personne, l'appartenance au sprint et la
-            # participation suffisent : les dates WBS ne doivent pas filtrer.
+            # Pour la vue sprint + personne, la seule sélection est la liste
+            # SprintManagement + Participation. Les dates WBS ne filtrent rien.
             tasks = [
                 replace(
                     task,
                     assignees=sprint_participants.get(task.task_id, ()) or task.assignees,
-                    start_deadline=sprint_start,
-                    finish_deadline=sprint_end,
+                    start_deadline=None,
+                    finish_deadline=None,
                     dependencies=tuple(dep for dep in task.dependencies if dep in selected_ids),
                 ) if task.task_id in selected_ids else task
                 for task in tasks
             ]
+            # Utiliser les dates du sprint uniquement comme axe graphique, et
+            # non comme filtre venant des dates individuelles du WBS.
+            start, end = sprint_start, sprint_end
         if start is None:
             start = sprint_start
         if end is None:
