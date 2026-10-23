@@ -407,9 +407,9 @@ def _make_timeline(
             )
             for item in sprint_rows_for_selection
         }
-        # La colonne Participation de SprintManagement (N) est la source de vérité
-        # pour le filtre personne : elle représente les personnes ayant travaillé
-        # sur la tâche, contrairement à Répartition qui représente l'affectation.
+        # En mode Prévu, la colonne Participation (N) permet de filtrer sur
+        # les personnes ayant réellement participé à la tâche. Répartition (L)
+        # reste utilisée pour afficher les personnes prévues dans le WBS.
         sprint_participants = {
             sprint_id_by_row[id(item)]: tuple(
                 name.strip() for name in str(item.get("participants", "")).split(",")
@@ -418,15 +418,16 @@ def _make_timeline(
             for item in sprint_rows_for_selection
         }
         # En mode Réel, la source de vérité est l'onglet Heures de la personne.
-        # Ne pas filtrer les tâches selon la colonne Participation : une activité
-        # réellement enregistrée suffit à faire apparaître la tâche.
+        # En mode Prévu, utiliser Participation, et non Répartition, pour que
+        # les contributeurs comme Lavabraz puissent voir les tâches auxquelles
+        # ils ont participé même s'ils ne sont pas dans l'affectation prévue.
         if person and mode == "prevu":
             person_key = person.strip().casefold()
             selected_ids = {
                 task_id for task_id in selected_ids
                 if any(
                     (sheet_writer.resolve_member(name) or name).casefold() == person_key
-                    for name in sprint_assignments.get(task_id, ())
+                    for name in sprint_participants.get(task_id, ())
                 )
             }
             if not selected_ids:
