@@ -308,6 +308,25 @@ def _make_timeline(
         sheet_writer.wbs_start_row,
         tolerate_planning_errors=mode == "reel",
     )
+    if mode == "global":
+        if sprint or person:
+            raise ValueError("La vue globale couvre tout le projet : ne renseignez pas sprint ou personne.")
+        start, end = infer_period_bounds("prevu", tasks, activity_rows, start, end)
+        years = range(start.year, end.year + 1)
+        holidays = set().union(*(french_public_holidays(year) for year in years))
+        calendar = WorkCalendar(holidays, configured_vacations())
+        hours_per_person_per_day = float(os.getenv("GANTT_HOURS_PER_PERSON_PER_DAY", "7"))
+        if not math.isfinite(hours_per_person_per_day) or hours_per_person_per_day <= 0:
+            raise ValueError("GANTT_HOURS_PER_PERSON_PER_DAY doit être supérieur à zéro.")
+        from gantt import parse_sheet_date
+        global_milestones = [
+            (item["name"], parse_sheet_date(item["date"]))
+            for item in milestone_rows
+            if parse_sheet_date(item["date"]) is not None
+        ]
+        return sheet_writer.write_global_timeline_sheet(
+            tasks, start, end, calendar, hours_per_person_per_day, global_milestones
+        )
     selected_sprint = next(
         (item for item in sprint_rows if item["sprint"].casefold() == sprint.casefold()),
         None,
@@ -381,10 +400,10 @@ def _make_timeline(
 
 @client.tree.command(
     name="frise",
-    description="Générer une frise chronologique prévue ou réelle",
+    description="Générer une frise prévue, réelle ou globale",
 )
 @app_commands.describe(
-    mode="Frise prévisionnelle ou basée sur les heures réellement saisies",
+    mode="Frise prévisionnelle, basée sur les heures réelles, ou synthèse globale",
     sprint="Sprint à afficher depuis SprintManagement",
     personne="Filtrer la frise sur un membre de l'équipe",
     debut="Début au format JJ/MM/AAAA (sinon déduit du sprint ou des données)",
@@ -393,6 +412,7 @@ def _make_timeline(
 @app_commands.choices(mode=[
     app_commands.Choice(name="Prévu", value="prevu"),
     app_commands.Choice(name="Réel", value="reel"),
+    app_commands.Choice(name="Globale du projet", value="global"),
 ])
 async def frise(
     interaction: discord.Interaction,
