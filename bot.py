@@ -436,7 +436,7 @@ async def frise(
                 raise ValueError(
                     "La date de fin doit être égale ou postérieure à la date de début."
                 )
-            if (period_end - period_start).days > 365:
+            if mode != "global" and (period_end - period_start).days > 365:
                 raise ValueError("La période demandée ne peut pas dépasser 366 jours.")
     except ValueError as error:
         await interaction.response.send_message(f"Paramètres invalides : {error}")
