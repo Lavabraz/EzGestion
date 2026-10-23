@@ -240,7 +240,7 @@ async def activite(
         "date": parsed.activity_date,
         "duration": parsed.duration_text,
         "duration_hours": parsed.duration_minutes / 60,
-        "member": interaction.user.display_name,
+        "member": _get_writer().resolve_member(interaction.user.display_name) or interaction.user.display_name,
         "discord_user_id": str(interaction.user.id),
         "message_url": "",
         "message_id": str(interaction.id),
