@@ -251,6 +251,52 @@ class GoogleSheetWriter:
             new_total,
         )
 
+    def _refresh_wbs_participation(
+        self,
+        selected_row: int,
+        selected_member: str,
+    ):
+        """Reconstruit les participants WBS à partir des activités déjà saisies."""
+        rows_by_task = {}
+        for row, task_name in self.wbs_tasks:
+            rows_by_task.setdefault(task_name.casefold(), []).append(row)
+
+        participants_by_row = {}
+        for member in self.members.values():
+            values = self.worksheet.get(
+                f"{member['date']}{self.start_row}:{member['task']}",
+                value_render_option="UNFORMATTED_VALUE",
+            )
+            for activity in values:
+                if len(activity) < 3 or not str(activity[2]).strip():
+                    continue
+                matching_rows = rows_by_task.get(str(activity[2]).strip().casefold(), [])
+                if len(matching_rows) == 1:
+                    participants_by_row.setdefault(matching_rows[0], set()).add(
+                        member["display"]
+                    )
+
+        participants_by_row.setdefault(selected_row, set()).add(selected_member)
+
+        updates = []
+        for row, _ in self.wbs_tasks:
+            names = sorted(
+                participants_by_row.get(row, set()),
+                key=str.casefold,
+            )
+            updates.append(
+                {
+                    "range": f"L{row}",
+                    "values": [[", ".join(names)]],
+                }
+            )
+
+        if updates:
+            self.wbs_worksheet.batch_update(
+                updates,
+                value_input_option="USER_ENTERED",
+            )
+
     def write_activity(self, record, wbs_row: int):
         author = str(record.get("member", "")).strip().casefold()
         member = self.members.get(author)
@@ -275,6 +321,7 @@ class GoogleSheetWriter:
             value_input_option="USER_ENTERED",
         )
         self._add_wbs_hours(wbs_row, record["duration_hours"])
+        self._refresh_wbs_participation(wbs_row, member["display"])
         log.info(
             "Activité de %s écrite pour %r dans %s%d:%s%d",
             member["display"], task_name, date_col, row, task_col, row,

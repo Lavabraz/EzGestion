@@ -164,6 +164,6 @@ Dans l'onglet individuel, le bot écrit uniquement dans les trois cellules du bl
 
 ### Ajout des heures dans WBS
 
-La commande propose les tâches de la colonne D de l'onglet `WBS` à partir de la ligne 2. Après sélection, la durée est ajoutée au total de la colonne K sur cette même ligne. La valeur déjà présente en K doit être numérique ou vide.
+La commande propose les tâches de la colonne D de l'onglet `WBS` à partir de la ligne 2. Après sélection, la durée est ajoutée au total de la colonne K sur cette même ligne. La colonne L liste les membres ayant participé à la tâche; cette liste est recalculée depuis l'historique des blocs individuels à chaque `/activite`, ce qui renseigne aussi les activités déjà enregistrées. Les tâches doivent avoir des intitulés uniques pour que l'historique soit attribué sans ambiguïté. La valeur déjà présente en K doit être numérique ou vide.
 
 Les paramètres facultatifs sont `GOOGLE_WBS_WORKSHEET_NAME` (défaut : `WBS`) et `GOOGLE_WBS_DATA_START_ROW` (défaut : `2`). Vérifiez la structure et faites un essai sur une copie du tableur avant la mise en production.
