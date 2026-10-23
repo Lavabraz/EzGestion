@@ -467,6 +467,8 @@ class GoogleSheetWriter:
         milestones=None,
         selected_task_ids=None,
         sprint_label: str | None = None,
+        sprint_window: bool = False,
+        critical_ids=None,
     ) -> tuple[str, str]:
         """Écrit la frise chronologique dans un onglet Google Sheets dédié."""
         from datetime import timedelta
@@ -487,7 +489,21 @@ class GoogleSheetWriter:
         task_by_id = {task.task_id: task for task in tasks}
         rows = []
         warnings = []
-        if mode == "prevu":
+        if mode == "prevu" and sprint_window:
+            from gantt import sprint_window_rows
+            for task, start, finish, hours, duration, critical, _ in sprint_window_rows(
+                tasks, period_start, period_end, calendar,
+                person=person, selected_task_ids=selected_task_ids,
+                critical_ids=critical_ids,
+            ):
+                rows.append({
+                    "task": task, "start": start, "finish": finish,
+                    "hours": hours, "duration": duration,
+                    "critical": critical, "days": {},
+                })
+            if not rows:
+                raise ValueError("Aucune tâche du sprint à afficher avec ces filtres.")
+        elif mode == "prevu":
             planned = plan_tasks(
                 tasks, period_start, period_end, calendar, hours_per_person_per_day
             )
