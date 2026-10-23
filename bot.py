@@ -417,6 +417,19 @@ def _make_timeline(
         from gantt import parse_sheet_date
         sprint_start = parse_sheet_date(selected_sprint["start"])
         sprint_end = parse_sheet_date(selected_sprint["end"])
+        if person and sprint_start and sprint_end:
+            # Pour la vue sprint + personne, l'appartenance au sprint et la
+            # participation suffisent : les dates WBS ne doivent pas filtrer.
+            tasks = [
+                replace(
+                    task,
+                    assignees=sprint_participants.get(task.task_id, ()) or task.assignees,
+                    start_deadline=sprint_start,
+                    finish_deadline=sprint_end,
+                    dependencies=tuple(dep for dep in task.dependencies if dep in selected_ids),
+                ) if task.task_id in selected_ids else task
+                for task in tasks
+            ]
         if start is None:
             start = sprint_start
         if end is None:
