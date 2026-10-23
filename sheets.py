@@ -60,6 +60,18 @@ class GoogleSheetWriter:
             },
         }
 
+        self.member_aliases = {}
+        for key, member in self.members.items():
+            aliases = os.getenv(
+                f"MEMBER_{key.upper()}_DISCORD_NAMES",
+                f"{member['display']},Lavabraz" if key == "nathan" else member["display"],
+            )
+            for alias in aliases.split(","):
+                normalized_alias = alias.strip().lstrip("@").casefold()
+                if normalized_alias:
+                    self.member_aliases[normalized_alias] = key
+            self.member_aliases[member["display"].casefold()] = key
+
         if not self.spreadsheet_id:
             raise RuntimeError("Configurez GOOGLE_SPREADSHEET_ID dans .env")
         if not Path(self.credentials_path).is_file():
@@ -78,6 +90,12 @@ class GoogleSheetWriter:
         self.livrables_worksheet = self.spreadsheet.worksheet(self.livrables_worksheet_name)
         self.wbs_tasks = []
         self.refresh_wbs_tasks()
+
+    def resolve_member(self, name: str) -> str | None:
+        """Résout un pseudo Discord ou un nom de feuille vers le membre configuré."""
+        normalized = str(name or "").strip().lstrip("@").casefold()
+        key = self.member_aliases.get(normalized)
+        return self.members[key]["display"] if key else None
 
     def refresh_wbs_tasks(self):
         """Recharge les tâches WBS utilisées par l'autocomplétion Discord."""
