@@ -363,31 +363,59 @@ def _make_timeline(
     sprint_window = False
     critical_ids: set[str] | None = None
     if selected_sprint:
-        selected_ids = {
-            str(item["task_id"]).strip().removesuffix(".0")
-            for item in sprint_task_rows
+        # Résoudre les IDs de SprintManagement vers les IDs canoniques du WBS.
+        # Google Sheets peut renvoyer un ID numérique différemment (ex. 1.1,
+        # 1.10 ou un ID stocké en texte). En cas d'écart, le nom exact sert
+        # de repli afin qu'une tâche valide du sprint ne disparaisse pas.
+        sprint_rows_for_selection = [
+            item for item in sprint_task_rows
             if item["sprint"].casefold() == sprint.casefold()
+        ]
+        wbs_by_id = {task.task_id: task for task in tasks}
+        wbs_by_name = {}
+        for task in tasks:
+            wbs_by_name.setdefault(task.name.strip().casefold(), []).append(task)
+
+        def canonical_sprint_task_id(item):
+            raw_id = str(item.get("task_id", "")).strip().removesuffix(".0")
+            if raw_id in wbs_by_id:
+                return raw_id
+            matches = wbs_by_name.get(str(item.get("name", "")).strip().casefold(), [])
+            if len(matches) == 1:
+                log.warning(
+                    "ID SprintManagement %r résolu vers WBS %r via le nom %r",
+                    raw_id, matches[0].task_id, item.get("name"),
+                )
+                return matches[0].task_id
+            log.warning(
+                "Tâche SprintManagement non résolue dans le WBS : ID=%r, nom=%r",
+                raw_id, item.get("name"),
+            )
+            return raw_id
+
+        sprint_id_by_row = {
+            id(item): canonical_sprint_task_id(item)
+            for item in sprint_rows_for_selection
         }
+        selected_ids = set(sprint_id_by_row.values())
         if not any(task.task_id in selected_ids for task in tasks):
             raise ValueError(f"Aucune tâche WBS correspondante au sprint {sprint!r}.")
         sprint_assignments = {
-            str(item["task_id"]).strip().removesuffix(".0"): tuple(
+            sprint_id_by_row[id(item)]: tuple(
                 name.strip() for name in str(item.get("assignees", "")).split(",")
                 if name.strip()
             )
-            for item in sprint_task_rows
-            if item["sprint"].casefold() == sprint.casefold()
+            for item in sprint_rows_for_selection
         }
         # La colonne Participation de SprintManagement (N) est la source de vérité
         # pour le filtre personne : elle représente les personnes ayant travaillé
         # sur la tâche, contrairement à Répartition qui représente l'affectation.
         sprint_participants = {
-            str(item["task_id"]).strip().removesuffix(".0"): tuple(
+            sprint_id_by_row[id(item)]: tuple(
                 name.strip() for name in str(item.get("participants", "")).split(",")
                 if name.strip()
             )
-            for item in sprint_task_rows
-            if item["sprint"].casefold() == sprint.casefold()
+            for item in sprint_rows_for_selection
         }
         # En mode Réel, la source de vérité est l'onglet Heures de la personne.
         # Ne pas filtrer les tâches selon la colonne Participation : une activité
