@@ -964,7 +964,14 @@ def render_timeline(
             raise ValueError("Aucune activité réelle enregistrée dans cette période.")
 
     count = len(rows)
-    fig_height = max(4.8, 1.25 + count * 0.78 + min(len(milestones or []), 8) * 0.18)
+    visible_milestones = [
+        (name, day) for name, day in (milestones or [])
+        if period_start <= day <= period_end
+    ]
+    # Reserve a separate vertical lane for every milestone so labels do not
+    # overlap and later milestones remain readable in the Discord image.
+    milestone_band = len(visible_milestones)
+    fig_height = max(4.8, 1.25 + count * 0.78 + milestone_band * 0.42)
     figure = Figure(figsize=(18, fig_height), constrained_layout=False)
     FigureCanvasAgg(figure)
     axis = figure.add_subplot(1, 1, 1)
@@ -1023,25 +1030,22 @@ def render_timeline(
                 clip_on=True,
             )
 
-    visible_milestones = [(name, day) for name, day in (milestones or [])
-                          if period_start <= day <= period_end]
     if visible_milestones:
-        # Add a dedicated band above the task lanes for highly visible milestone labels.
-        axis.set_ylim(count - 0.3, -1.35 - min(0.5, len(visible_milestones) * 0.05))
+        # Add a dedicated band above the task lanes with one lane per milestone.
+        axis.set_ylim(count - 0.3, -1.05 - milestone_band * 0.78)
         for index, (name, day) in enumerate(visible_milestones):
             x = datetime.combine(day, datetime.min.time()) + timedelta(hours=12)
-            axis.axvline(x, color="#b54708", linestyle="--", linewidth=1.6, alpha=0.9, zorder=2)
-            y_header = -0.78 - (index % 2) * 0.38
-            axis.scatter([x], [y_header], marker="D", s=68, color="#f79009",
+            axis.axvline(x, color="#b54708", linestyle="--", linewidth=1.2, alpha=0.8, zorder=2)
+            y_header = -0.72 - index * 0.78
+            axis.scatter([x], [y_header], marker="D", s=55, color="#f79009",
                          edgecolors="#7a2e0e", linewidths=1.0, zorder=6, clip_on=False)
             axis.annotate(
-                f"{name}\\n{day:%d/%m/%Y}",
-                xy=(x, y_header), xytext=(8, 8 if index % 2 == 0 else -25),
-                textcoords="offset points", ha="left",
-                va="bottom" if index % 2 == 0 else "top",
+                f"{name}\n{day:%d/%m/%Y}",
+                xy=(x, y_header), xytext=(8, 4),
+                textcoords="offset points", ha="left", va="bottom",
                 fontsize=8, fontweight="bold", color="#7a2e0e",
-                bbox={"boxstyle": "round,pad=0.4", "facecolor": "#fff4e5",
-                      "edgecolor": "#f79009", "linewidth": 1.2},
+                bbox={"boxstyle": "round,pad=0.35", "facecolor": "#fff4e5",
+                      "edgecolor": "#f79009", "linewidth": 1.0},
                 zorder=7, clip_on=False,
             )
 

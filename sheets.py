@@ -354,14 +354,25 @@ class GoogleSheetWriter:
         for index, row in enumerate(rows):
             headers = [normalized(value) for value in row]
             if all(key in headers for key in ("sprint", "jalon", "date de livraison")):
+                sprint_column = headers.index("sprint")
+                name_column = headers.index("jalon")
+                date_column = headers.index("date de livraison")
+                current_sprint = ""
                 for data in rows[index + 1:]:
-                    sprint_name = str(cell(data, headers.index("sprint")) or "").strip()
-                    name = str(cell(data, headers.index("jalon")) or "").strip()
-                    day = cell(data, headers.index("date de livraison"))
-                    if not sprint_name:
-                        break
-                    if name and day not in ("", None):
-                        milestone_rows.append({"sprint": sprint_name, "name": name, "date": day})
+                    # Merged sprint cells are returned as blank on subsequent rows;
+                    # carry the last sprint name forward instead of stopping after
+                    # the first milestone in that sprint.
+                    sprint_name = str(cell(data, sprint_column) or "").strip()
+                    if sprint_name:
+                        current_sprint = sprint_name
+                    name = str(cell(data, name_column) or "").strip()
+                    day = cell(data, date_column)
+                    if name and day not in ("", None) and current_sprint:
+                        milestone_rows.append({
+                            "sprint": current_sprint,
+                            "name": name,
+                            "date": day,
+                        })
                 break
         return sprint_rows, task_rows, milestone_rows
 
@@ -829,8 +840,6 @@ class GoogleSheetWriter:
                 "sheetId": ws.id, "dimension": "ROWS",
                 "startIndex": detail_start - 1, "endIndex": detail_end}}})
             requests.append({"updateDimensionGroup": {
-                "range": {"sheetId": ws.id, "dimension": "ROWS",
-                          "startIndex": detail_start - 1, "endIndex": detail_end},
                 "dimensionGroup": {"range": {"sheetId": ws.id, "dimension": "ROWS",
                                              "startIndex": detail_start - 1, "endIndex": detail_end},
                                    "depth": 1, "collapsed": True},
