@@ -4,6 +4,7 @@ import struct
 
 from gantt import (
     WorkCalendar,
+    WbsTask,
     aggregate_actuals,
     french_public_holidays,
     infer_period_bounds,
