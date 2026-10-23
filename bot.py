@@ -386,20 +386,9 @@ def _make_timeline(
             for item in sprint_task_rows
             if item["sprint"].casefold() == sprint.casefold()
         }
-        if person and mode == "reel":
-            person_key = person.strip().casefold()
-            selected_ids = {
-                task_id for task_id in selected_ids
-                if any(
-                    (sheet_writer.resolve_member(name) or name).casefold() == person_key
-                    for name in sprint_participants.get(task_id, ())
-                )
-            }
-            if not selected_ids:
-                raise ValueError(
-                    f"Aucune tâche du sprint {sprint!r} n'indique de participation pour {person!r} "
-                    "dans la colonne Participation de SprintManagement."
-                )
+        # En mode Réel, la source de vérité est l'onglet Heures de la personne.
+        # Ne pas filtrer les tâches selon la colonne Participation : une activité
+        # réellement enregistrée suffit à faire apparaître la tâche.
         elif person and mode == "prevu":
             person_key = person.strip().casefold()
             selected_ids = {
@@ -434,23 +423,50 @@ def _make_timeline(
         from gantt import parse_sheet_date
         sprint_start = parse_sheet_date(selected_sprint["start"])
         sprint_end = parse_sheet_date(selected_sprint["end"])
-        if person and sprint_start and sprint_end:
-            # La frise Prévu utilise Répartition pour la capacité; la frise Réel
-            # utilise Participation pour filtrer les tâches réellement effectuées.
-            selected_people = sprint_assignments if mode == "prevu" else sprint_participants
+        if person and mode == "prevu" and sprint_start and sprint_end:
             tasks = [
                 replace(
                     task,
-                    assignees=selected_people.get(task.task_id, ()) or task.assignees,
+                    assignees=sprint_assignments.get(task.task_id, ()) or task.assignees,
                     start_deadline=None,
                     finish_deadline=None,
                     dependencies=tuple(dep for dep in task.dependencies if dep in selected_ids),
                 ) if task.task_id in selected_ids else task
                 for task in tasks
             ]
-            # Pour les frises par personne d'un sprint, seules les dates du sprint
-            # définissent la fenêtre, pas les dates individuelles du WBS.
             start, end = sprint_start, sprint_end
+        elif person and mode == "reel":
+            # En Réel, chercher les dates réellement enregistrées dans Heures
+            # pour les tâches du sprint, sans limiter aux dates du sprint.
+            selected_tasks = [task for task in tasks if task.task_id in selected_ids]
+            selected_names = {task.name.casefold() for task in selected_tasks}
+            selected_id_set = {task.task_id for task in selected_tasks}
+            matching_days = []
+            person_key = person.strip().casefold()
+            for activity in activity_rows:
+                if len(activity) < 4:
+                    continue
+                activity_person = str(activity[3]).strip()
+                resolved_activity_person = sheet_writer.resolve_member(activity_person) or activity_person
+                if resolved_activity_person.casefold() != person_key:
+                    continue
+                task_name = str(activity[2] or "").strip()
+                import re
+                match = re.match(r"^\\[([^\\]]+)\\]\\s*", task_name)
+                if match and match.group(1) in selected_id_set:
+                    is_sprint_task = True
+                else:
+                    is_sprint_task = task_name.casefold() in selected_names
+                if is_sprint_task:
+                    day = parse_sheet_date(activity[0])
+                    if day:
+                        matching_days.append(day)
+            if not matching_days:
+                raise ValueError(
+                    f"Aucune heure trouvée dans l'onglet Heures pour {person!r} "
+                    f"sur les tâches du sprint {sprint!r}."
+                )
+            start, end = min(matching_days), max(matching_days)
         if start is None:
             start = sprint_start
         if end is None:
