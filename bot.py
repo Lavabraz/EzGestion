@@ -423,16 +423,15 @@ def _make_timeline(
             for item in sprint_rows_for_selection
         }
         # En mode Réel, la source de vérité est l'onglet Heures de la personne.
-        # En mode Prévu, utiliser Participation, et non Répartition, pour que
-        # les contributeurs comme Lavabraz puissent voir les tâches auxquelles
-        # ils ont participé même s'ils ne sont pas dans l'affectation prévue.
+        # En mode Prévu, filtrer sur Répartition : ce sont les personnes
+        # affectées à la tâche dans le sprint.
         if person and mode == "prevu":
             person_key = person.strip().casefold()
             selected_ids = {
                 task_id for task_id in selected_ids
                 if any(
-                    (sheet_writer.resolve_member(name) or name).casefold() == person_key
-                    for name in sprint_participants.get(task_id, ())
+                    (sheet_writer.resolve_member(name) or name).strip().casefold() == person_key
+                    for name in sprint_assignments.get(task_id, ())
                 )
             }
             if not selected_ids:
