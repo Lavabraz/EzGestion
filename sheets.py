@@ -64,8 +64,12 @@ class GoogleSheetWriter:
         for key, member in self.members.items():
             aliases = os.getenv(
                 f"MEMBER_{key.upper()}_DISCORD_NAMES",
-                f"{member['display']},Lavabraz" if key == "nathan" else member["display"],
+                member["display"],
             )
+            # Toujours conserver le pseudo historique de Nathan, même si une
+            # variable d'environnement MEMBER_NATHAN_DISCORD_NAMES est définie.
+            if key == "nathan":
+                aliases = f"{aliases},Nathan,Lavabraz"
             for alias in aliases.split(","):
                 normalized_alias = alias.strip().lstrip("@").casefold()
                 if normalized_alias:
