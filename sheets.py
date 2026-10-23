@@ -622,8 +622,10 @@ class GoogleSheetWriter:
 
         def planned_dates(item):
             task = item.task
-            start = task.start_deadline or item.start
-            finish = task.finish_deadline or item.finish
+            if task.start_deadline and task.finish_deadline:
+                start, finish = task.start_deadline, task.finish_deadline
+            else:
+                start, finish = item.start, item.finish
             if finish < start:
                 raise ValueError(
                     f"Tâche WBS {task.task_id} : la date de fin précède la date de début."
