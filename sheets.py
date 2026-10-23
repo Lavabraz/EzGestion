@@ -36,6 +36,9 @@ class GoogleSheetWriter:
         self.sprint_worksheet_name = os.getenv(
             "GOOGLE_SPRINT_WORKSHEET_NAME", "SprintManagement"
         ).strip()
+        self.livrables_worksheet_name = os.getenv(
+            "GOOGLE_LIVRABLES_WORKSHEET_NAME", "Livrables"
+        ).strip()
         self.start_row = int(os.getenv("GOOGLE_DATA_START_ROW", "4"))
         self.wbs_worksheet_name = os.getenv("GOOGLE_WBS_WORKSHEET_NAME", "WBS").strip()
         self.wbs_start_row = int(os.getenv("GOOGLE_WBS_DATA_START_ROW", "2"))
@@ -72,6 +75,7 @@ class GoogleSheetWriter:
         self.worksheet = self.spreadsheet.worksheet(self.worksheet_name)
         self.wbs_worksheet = self.spreadsheet.worksheet(self.wbs_worksheet_name)
         self.sprint_worksheet = self.spreadsheet.worksheet(self.sprint_worksheet_name)
+        self.livrables_worksheet = self.spreadsheet.worksheet(self.livrables_worksheet_name)
         self.wbs_tasks = []
         self.refresh_wbs_tasks()
 
@@ -375,6 +379,42 @@ class GoogleSheetWriter:
                         })
                 break
         return sprint_rows, task_rows, milestone_rows
+
+    def read_livrables_milestones(self):
+        """Lit tous les jalons du tableau Jalons de l'onglet Livrables (H=nom, I=date)."""
+        from gantt import parse_sheet_date
+
+        rows = self.livrables_worksheet.get(
+            "H:I", value_render_option="UNFORMATTED_VALUE"
+        )
+        milestones = []
+        for row_number, row in enumerate(rows, start=1):
+            name = str(row[0] if len(row) > 0 else "").strip()
+            raw_date = row[1] if len(row) > 1 else ""
+            if not name or raw_date in ("", None):
+                continue
+            normalized_name = name.casefold()
+            normalized_date = str(raw_date).strip().casefold()
+            if normalized_name in {"jalon", "jalons", "nom", "nom du jalon"}:
+                continue
+            if normalized_date in {"date", "date du jalon", "date de livraison"}:
+                continue
+            try:
+                day = parse_sheet_date(raw_date)
+            except (TypeError, ValueError):
+                log.warning(
+                    "Jalon ignoré dans Livrables!H%d:I%d : date invalide %r",
+                    row_number, row_number, raw_date,
+                )
+                continue
+            if day is not None:
+                milestones.append({
+                    "sprint": "",
+                    "name": name,
+                    "date": day,
+                })
+        log.info("Jalons lus depuis Livrables : %d", len(milestones))
+        return milestones
 
     def write_timeline_sheet(
         self,
