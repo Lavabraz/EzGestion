@@ -357,55 +357,36 @@ class GoogleSheetWriter:
                     })
                 break
 
-        # Le tableau des tâches commence à la ligne 21 : l'ID WBS est en G
-        # et le nom de la tâche en I. Le nom du sprint est lu depuis la colonne
-        # dont l'en-tête contient "sprint" dans les lignes précédentes; les
-        # cellules fusionnées sont prises en charge en conservant la dernière valeur.
-        sprint_column = None
-        for header_row in rows[14:20]:
-            for column, value in enumerate(header_row):
-                if normalized(value) == "sprint":
-                    sprint_column = column
-                    break
-            if sprint_column is not None:
-                break
-        if sprint_column is None and sprint_rows:
-            sprint_names = {item["sprint"].casefold() for item in sprint_rows}
-            best_column, best_score = None, 0
-            for column in range(6):
-                score = sum(
-                    1 for data in rows[20:]
-                    if str(cell(data, column) or "").strip().casefold() in sprint_names
-                )
-                if score > best_score:
-                    best_column, best_score = column, score
-            sprint_column = best_column if best_score else None
+        # Le tableau des tâches du sprint a ses en-têtes à la ligne 21 :
+        # F = Sprint, G = ID WBS, I = nom de tâche. Les données commencent ligne 22.
+        sprint_column, task_id_column, task_name_column = 5, 6, 8
         current_sprint = ""
-        for data in rows[20:]:
-            sprint_name = str(cell(data, sprint_column) or "").strip() if sprint_column is not None else ""
+        for data in rows[21:]:
+            sprint_name = str(cell(data, sprint_column) or "").strip()
             if sprint_name:
                 current_sprint = sprint_name
-            task_id = str(cell(data, 6) or "").strip()
-            task_name = str(cell(data, 8) or "").strip()
+            task_id = str(cell(data, task_id_column) or "").strip()
+            task_name = str(cell(data, task_name_column) or "").strip()
             if not task_id and not task_name:
                 continue
             if not task_id or not task_name:
-                log.warning("Ligne SprintManagement incomplète ignorée : ID=%r, tâche=%r", task_id, task_name)
+                log.warning(
+                    "Ligne SprintManagement incomplète ignorée : ID=%r, tâche=%r",
+                    task_id, task_name,
+                )
                 continue
             if not current_sprint:
-                # Repli sur le sprint unique si le tableau ne répète pas son nom
-                # dans les lignes de tâches.
-                if len(sprint_rows) == 1:
-                    current_sprint = sprint_rows[0]["sprint"]
-                else:
-                    log.warning("Tâche SprintManagement!G:I sans sprint associé : %s — %s", task_id, task_name)
-                    continue
+                log.warning(
+                    "Tâche SprintManagement!G:I sans sprint associé : %s — %s",
+                    task_id, task_name,
+                )
+                continue
             task_rows.append({
                 "sprint": current_sprint,
                 "task_id": task_id.removesuffix(".0"),
-                "status": "",
+                "status": cell(data, 7),
                 "name": task_name,
-                "assignees": "",
+                "assignees": str(cell(data, 10) or "").strip(),
             })
         for index, row in enumerate(rows):
             headers = [normalized(value) for value in row]
