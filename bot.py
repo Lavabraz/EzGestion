@@ -311,6 +311,19 @@ def _make_timeline(
     if mode == "global":
         if sprint or person:
             raise ValueError("La vue globale couvre tout le projet : ne renseignez pas sprint ou personne.")
+        from gantt import parse_sheet_date
+        global_milestones = [
+            (item["name"], parse_sheet_date(item["date"]))
+            for item in milestone_rows
+            if parse_sheet_date(item["date"]) is not None
+        ]
+        # Quand les dates ne sont pas imposées par l'utilisateur, inclure aussi
+        # les jalons dans les bornes afin qu'ils ne soient pas coupés de la frise.
+        milestone_dates = [day for _, day in global_milestones]
+        if start is None and milestone_dates:
+            start = min(milestone_dates)
+        if end is None and milestone_dates:
+            end = max(milestone_dates)
         start, end = infer_period_bounds("prevu", tasks, activity_rows, start, end)
         years = range(start.year, end.year + 1)
         holidays = set().union(*(french_public_holidays(year) for year in years))
@@ -318,12 +331,6 @@ def _make_timeline(
         hours_per_person_per_day = float(os.getenv("GANTT_HOURS_PER_PERSON_PER_DAY", "7"))
         if not math.isfinite(hours_per_person_per_day) or hours_per_person_per_day <= 0:
             raise ValueError("GANTT_HOURS_PER_PERSON_PER_DAY doit être supérieur à zéro.")
-        from gantt import parse_sheet_date
-        global_milestones = [
-            (item["name"], parse_sheet_date(item["date"]))
-            for item in milestone_rows
-            if parse_sheet_date(item["date"]) is not None
-        ]
         image, description = render_timeline(
             tasks,
             start,
@@ -388,6 +395,13 @@ def _make_timeline(
             start = sprint_start
         if end is None:
             end = sprint_end
+    # Étendre automatiquement la période aux jalons si l'utilisateur n'a pas
+    # fixé explicitement les dates. Sinon, respecter strictement son intervalle.
+    milestone_dates = [day for _, day in selected_milestones]
+    if start is None and milestone_dates:
+        start = min(milestone_dates)
+    if end is None and milestone_dates:
+        end = max(milestone_dates)
     start, end = infer_period_bounds(mode, tasks, activity_rows, start, end)
     if (end - start).days > 365:
         raise ValueError("La période demandée ne peut pas dépasser 366 jours.")
