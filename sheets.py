@@ -702,6 +702,7 @@ class GoogleSheetWriter:
                 and planned_dates(item)[0] <= period_end
             ]
             details.sort(key=lambda item: (planned_dates(item)[0], planned_dates(item)[1], item.task.task_id))
+            row[1] = f"{'▸' if details else '•'} {group_name} ({len(group['items'])} tâches)"
             for item in details:
                 task = item.task
                 task_start, task_finish = planned_dates(item)
@@ -732,6 +733,8 @@ class GoogleSheetWriter:
             values.append(row)
             milestone_rows.append((len(values), str(name), day))
 
+        values[1][1] = f"Jalons : {len(milestone_rows)}"
+        values[1][2] = f"Tâches importantes : {len(important_rows)}"
         needed_rows, needed_cols = len(values), len(header)
         if ws.row_count < needed_rows or ws.col_count < needed_cols:
             ws.resize(rows=max(ws.row_count, needed_rows), cols=max(ws.col_count, needed_cols))
