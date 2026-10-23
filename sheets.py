@@ -577,11 +577,17 @@ class GoogleSheetWriter:
         ws.batch_format(formats)
         ws.freeze(rows=3, cols=2)
         ws.set_basic_filter(f"A3:{last_col}{needed_rows}")
-        ws.format("A:A", {"columnWidth": 80})
-        ws.format("B:B", {"columnWidth": 300, "wrapStrategy": "WRAP"})
-        ws.format("C:D", {"columnWidth": 130, "wrapStrategy": "WRAP"})
-        ws.format("E:H", {"columnWidth": 105})
-        ws.format(f"I:{last_col}", {"columnWidth": 42, "horizontalAlignment": "CENTER"})
+        self.sheets_api.spreadsheets().batchUpdate(
+            spreadsheetId=self.spreadsheet_id,
+            body={"requests": [
+                {"updateDimensionProperties": {"range": {"sheetId": ws.id, "dimension": "COLUMNS", "startIndex": 0, "endIndex": 1}, "properties": {"pixelSize": 80}, "fields": "pixelSize"}},
+                {"updateDimensionProperties": {"range": {"sheetId": ws.id, "dimension": "COLUMNS", "startIndex": 1, "endIndex": 2}, "properties": {"pixelSize": 300}, "fields": "pixelSize"}},
+                {"updateDimensionProperties": {"range": {"sheetId": ws.id, "dimension": "COLUMNS", "startIndex": 2, "endIndex": 4}, "properties": {"pixelSize": 130}, "fields": "pixelSize"}},
+                {"updateDimensionProperties": {"range": {"sheetId": ws.id, "dimension": "COLUMNS", "startIndex": 4, "endIndex": 8}, "properties": {"pixelSize": 105}, "fields": "pixelSize"}},
+                {"updateDimensionProperties": {"range": {"sheetId": ws.id, "dimension": "COLUMNS", "startIndex": 8, "endIndex": needed_cols}, "properties": {"pixelSize": 42}, "fields": "pixelSize"}}
+            ]}
+        ).execute()
+        ws.format(f"I:{last_col}", {"horizontalAlignment": "CENTER"})
         ws.format(f"A1:{last_col}{needed_rows}", {"verticalAlignment": "MIDDLE"})
         ws.format(f"A4:H{needed_rows}", {"wrapStrategy": "WRAP"})
         summary = f"{len(rows)} tâche(s) affichée(s) dans l'onglet « {sheet_name} »."
@@ -795,10 +801,16 @@ class GoogleSheetWriter:
                 "horizontalAlignment": "CENTER"}})
         ws.batch_format(formats)
         ws.freeze(rows=3, cols=6)
-        ws.format("A:A", {"columnWidth": 100})
-        ws.format("B:B", {"columnWidth": 300, "wrapStrategy": "WRAP"})
-        ws.format("C:F", {"columnWidth": 110})
-        ws.format(f"G:{last_col}", {"columnWidth": 70, "horizontalAlignment": "CENTER"})
+        self.sheets_api.spreadsheets().batchUpdate(
+            spreadsheetId=self.spreadsheet_id,
+            body={"requests": [
+                {"updateDimensionProperties": {"range": {"sheetId": ws.id, "dimension": "COLUMNS", "startIndex": 0, "endIndex": 1}, "properties": {"pixelSize": 100}, "fields": "pixelSize"}},
+                {"updateDimensionProperties": {"range": {"sheetId": ws.id, "dimension": "COLUMNS", "startIndex": 1, "endIndex": 2}, "properties": {"pixelSize": 300}, "fields": "pixelSize"}},
+                {"updateDimensionProperties": {"range": {"sheetId": ws.id, "dimension": "COLUMNS", "startIndex": 2, "endIndex": 6}, "properties": {"pixelSize": 110}, "fields": "pixelSize"}},
+                {"updateDimensionProperties": {"range": {"sheetId": ws.id, "dimension": "COLUMNS", "startIndex": 6, "endIndex": needed_cols}, "properties": {"pixelSize": 70}, "fields": "pixelSize"}}
+            ]}
+        ).execute()
+        ws.format(f"G:{last_col}", {"horizontalAlignment": "CENTER", "wrapStrategy": "WRAP"})
 
         # Add collapsible row groups for the important task details. Delete previous
         # groups first so refreshing the overview does not accumulate row groups.
