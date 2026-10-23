@@ -261,7 +261,8 @@ class GoogleSheetWriter:
 
     def write_recurring_activity(self, record, wbs_row: int) -> bool:
         author = str(record.get("member", "")).strip().casefold()
-        member = self.members.get(author)
+        member_key = self.member_aliases.get(author)
+        member = self.members.get(member_key) if member_key else self.members.get(author)
         if member is None:
             raise ValueError(
                 f"Le membre {record.get('member')!r} n'est pas configuré "
@@ -361,13 +362,24 @@ class GoogleSheetWriter:
         # dont l'en-tête contient "sprint" dans les lignes précédentes; les
         # cellules fusionnées sont prises en charge en conservant la dernière valeur.
         sprint_column = None
-        for header_row in rows[:20]:
+        for header_row in rows[14:20]:
             for column, value in enumerate(header_row):
                 if normalized(value) == "sprint":
                     sprint_column = column
                     break
             if sprint_column is not None:
                 break
+        if sprint_column is None and sprint_rows:
+            sprint_names = {item["sprint"].casefold() for item in sprint_rows}
+            best_column, best_score = None, 0
+            for column in range(6):
+                score = sum(
+                    1 for data in rows[20:]
+                    if str(cell(data, column) or "").strip().casefold() in sprint_names
+                )
+                if score > best_score:
+                    best_column, best_score = column, score
+            sprint_column = best_column if best_score else None
         current_sprint = ""
         for data in rows[20:]:
             sprint_name = str(cell(data, sprint_column) or "").strip() if sprint_column is not None else ""
@@ -991,7 +1003,8 @@ class GoogleSheetWriter:
 
     def write_activity(self, record, wbs_row: int):
         author = str(record.get("member", "")).strip().casefold()
-        member = self.members.get(author)
+        member_key = self.member_aliases.get(author)
+        member = self.members.get(member_key) if member_key else self.members.get(author)
         if member is None:
             raise ValueError(
                 f"Le nom Discord {record.get('member')!r} ne correspond à aucun membre configuré. "
