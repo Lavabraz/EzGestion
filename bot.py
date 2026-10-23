@@ -386,7 +386,7 @@ def _make_timeline(
             for item in sprint_task_rows
             if item["sprint"].casefold() == sprint.casefold()
         }
-        if person:
+        if person and mode == "reel":
             person_key = person.strip().casefold()
             selected_ids = {
                 task_id for task_id in selected_ids
@@ -399,6 +399,20 @@ def _make_timeline(
                 raise ValueError(
                     f"Aucune tâche du sprint {sprint!r} n'indique de participation pour {person!r} "
                     "dans la colonne Participation de SprintManagement."
+                )
+        elif person and mode == "prevu":
+            person_key = person.strip().casefold()
+            selected_ids = {
+                task_id for task_id in selected_ids
+                if any(
+                    (sheet_writer.resolve_member(name) or name).casefold() == person_key
+                    for name in sprint_assignments.get(task_id, ())
+                )
+            }
+            if not selected_ids:
+                raise ValueError(
+                    f"Aucune tâche du sprint {sprint!r} n'est répartie sur {person!r} "
+                    "dans la colonne Répartition de SprintManagement."
                 )
         # Pour une frise de sprint, les dates limites globales du WBS ne doivent
         # pas exclure les tâches du sprint de sa propre fenêtre. On planifie les
@@ -421,20 +435,21 @@ def _make_timeline(
         sprint_start = parse_sheet_date(selected_sprint["start"])
         sprint_end = parse_sheet_date(selected_sprint["end"])
         if person and sprint_start and sprint_end:
-            # Pour la vue sprint + personne, la seule sélection est la liste
-            # SprintManagement + Participation. Les dates WBS ne filtrent rien.
+            # La frise Prévu utilise Répartition pour la capacité; la frise Réel
+            # utilise Participation pour filtrer les tâches réellement effectuées.
+            selected_people = sprint_assignments if mode == "prevu" else sprint_participants
             tasks = [
                 replace(
                     task,
-                    assignees=sprint_participants.get(task.task_id, ()) or task.assignees,
+                    assignees=selected_people.get(task.task_id, ()) or task.assignees,
                     start_deadline=None,
                     finish_deadline=None,
                     dependencies=tuple(dep for dep in task.dependencies if dep in selected_ids),
                 ) if task.task_id in selected_ids else task
                 for task in tasks
             ]
-            # Utiliser les dates du sprint uniquement comme axe graphique, et
-            # non comme filtre venant des dates individuelles du WBS.
+            # Pour les frises par personne d'un sprint, seules les dates du sprint
+            # définissent la fenêtre, pas les dates individuelles du WBS.
             start, end = sprint_start, sprint_end
         if start is None:
             start = sprint_start
