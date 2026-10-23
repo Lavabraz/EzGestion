@@ -757,7 +757,18 @@ class GoogleSheetWriter:
             formats.append({"range": f"A{row_index}:{last_col}{row_index}", "format": {
                 "backgroundColor": {"red": 0.84, "green": 0.89, "blue": 0.95},
                 "textFormat": {"bold": True, "foregroundColor": {"red": 0.12, "green": 0.22, "blue": 0.36}}}})
-            start_col = 7 + week_index(max(period_start, grouped[values[row_index-1][1].split(" (")[0].removeprefix("▸ ") ]["start"]))
+            group_row = values[row_index - 1]
+            group_start = max(period_start, date.fromisoformat(group_row[3]))
+            group_finish = min(period_end, date.fromisoformat(group_row[4]))
+            first_col = 7 + week_index(group_start)
+            final_col = 7 + week_index(group_finish)
+            formats.append({"range": f"G{row_index}:{last_col}{row_index}", "format": {
+                "backgroundColor": {"red": 0.94, "green": 0.96, "blue": 0.98},
+                "horizontalAlignment": "CENTER"}})
+            formats.append({"range": f"{col_name(first_col)}{row_index}:{col_name(final_col)}{row_index}", "format": {
+                "backgroundColor": {"red": 0.25, "green": 0.38, "blue": 0.55},
+                "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}},
+                "horizontalAlignment": "CENTER"}})
         for row_index, item, task_start, task_finish in important_rows:
             color = {"red": 0.82, "green": 0.25, "blue": 0.31} if item.critical else {"red": 0.22, "green": 0.49, "blue": 0.75}
             formats.append({"range": f"G{row_index}:{last_col}{row_index}", "format": {
