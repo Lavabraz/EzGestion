@@ -301,57 +301,14 @@ def _make_timeline(
 ) -> tuple[BytesIO, str | None, str, str | None]:
     sheet_writer = _get_writer()
     wbs_rows, activity_rows = sheet_writer.read_gantt_data()
-    sprint_rows, sprint_task_rows, milestone_rows = sheet_writer.read_sprint_management_data()
+    sprint_rows, sprint_task_rows, _ = sheet_writer.read_sprint_management_data()
+    milestone_rows = sheet_writer.read_livrables_milestones()
     tasks, activity_rows = parse_gantt_data(
         wbs_rows,
         activity_rows,
         sheet_writer.wbs_start_row,
         tolerate_planning_errors=mode == "reel",
     )
-    if mode == "global":
-        if sprint or person:
-            raise ValueError("La vue globale couvre tout le projet : ne renseignez pas sprint ou personne.")
-        from gantt import parse_sheet_date
-        global_milestones = [
-            (item["name"], parse_sheet_date(item["date"]))
-            for item in milestone_rows
-            if parse_sheet_date(item["date"]) is not None
-        ]
-        # Conserver les bornes automatiques calculées depuis les tâches, puis
-        # les étendre aux jalons si l'utilisateur n'a pas fixé ces dates.
-        auto_start, auto_end = start is None, end is None
-        milestone_dates = [day for _, day in global_milestones]
-        start, end = infer_period_bounds("prevu", tasks, activity_rows, start, end)
-        if auto_start and milestone_dates:
-            start = min(start, min(milestone_dates))
-        if auto_end and milestone_dates:
-            end = max(end, max(milestone_dates))
-        years = range(start.year, end.year + 1)
-        holidays = set().union(*(french_public_holidays(year) for year in years))
-        calendar = WorkCalendar(holidays, configured_vacations())
-        hours_per_person_per_day = float(os.getenv("GANTT_HOURS_PER_PERSON_PER_DAY", "7"))
-        if not math.isfinite(hours_per_person_per_day) or hours_per_person_per_day <= 0:
-            raise ValueError("GANTT_HOURS_PER_PERSON_PER_DAY doit être supérieur à zéro.")
-        image, description = render_timeline(
-            tasks,
-            start,
-            end,
-            calendar,
-            hours_per_person_per_day,
-            mode="prevu",
-            activity_rows=activity_rows,
-            milestones=global_milestones,
-        )
-        try:
-            sheet_url, _ = sheet_writer.write_global_timeline_sheet(
-                tasks, start, end, calendar, hours_per_person_per_day, global_milestones
-            )
-            sheet_error = None
-        except Exception as error:
-            log.exception("Image de frise globale générée, mais écriture Google Sheets échouée")
-            sheet_url = None
-            sheet_error = str(error)
-        return image, sheet_url, description, sheet_error
     selected_sprint = next(
         (item for item in sprint_rows if item["sprint"].casefold() == sprint.casefold()),
         None,
@@ -364,7 +321,6 @@ def _make_timeline(
         (item["name"], parse_sheet_date(item["date"]))
         for item in milestone_rows
         if parse_sheet_date(item["date"]) is not None
-        and (not sprint or item["sprint"].casefold() == sprint.casefold())
     ]
     selected_ids = None
     if selected_sprint:
@@ -396,8 +352,8 @@ def _make_timeline(
             start = sprint_start
         if end is None:
             end = sprint_end
-    # Conserver les bornes calculées depuis les tâches, puis les étendre aux
-    # jalons seulement pour les dates que l'utilisateur n'a pas précisées.
+    # Inclure les jalons de Livrables dans les bornes automatiques, sauf si
+    # une borne a été fournie explicitement ou déduite des dates du sprint.
     auto_start, auto_end = start is None, end is None
     milestone_dates = [day for _, day in selected_milestones]
     start, end = infer_period_bounds(mode, tasks, activity_rows, start, end)
@@ -452,7 +408,7 @@ def _make_timeline(
 
 @client.tree.command(
     name="frise",
-    description="Générer une frise prévue, réelle ou globale",
+    description="Générer une frise prévisionnelle ou réelle",
 )
 @app_commands.describe(
     mode="Frise prévisionnelle, basée sur les heures réelles, ou synthèse globale",
@@ -464,7 +420,6 @@ def _make_timeline(
 @app_commands.choices(mode=[
     app_commands.Choice(name="Prévu", value="prevu"),
     app_commands.Choice(name="Réel", value="reel"),
-    app_commands.Choice(name="Globale du projet", value="global"),
 ])
 async def frise(
     interaction: discord.Interaction,
@@ -488,7 +443,7 @@ async def frise(
                 raise ValueError(
                     "La date de fin doit être égale ou postérieure à la date de début."
                 )
-            if mode != "global" and (period_end - period_start).days > 365:
+            if (period_end - period_start).days > 365:
                 raise ValueError("La période demandée ne peut pas dépasser 366 jours.")
     except ValueError as error:
         await interaction.response.send_message(f"Paramètres invalides : {error}")
