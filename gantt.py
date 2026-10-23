@@ -902,6 +902,7 @@ def sprint_window_rows(
     person: str | None = None,
     selected_task_ids: set[str] | None = None,
     critical_ids: set[str] | None = None,
+    filter_person_assignees: bool = True,
 ) -> list[tuple]:
     """Lignes de frise prévisionnelle pour un sprint, sans replanifier le WBS.
 
@@ -916,7 +917,9 @@ def sprint_window_rows(
     for task in tasks:
         if selected_task_ids is not None and task.task_id not in selected_task_ids:
             continue
-        if person_key and not any(n.casefold() == person_key for n in task.assignees):
+        if filter_person_assignees and person_key and not any(
+            n.casefold() == person_key for n in task.assignees
+        ):
             continue
         start_day, finish_day = window_start, window_end
         if task.start_deadline and task.finish_deadline:
